@@ -14,7 +14,10 @@ let package = Package(
     targets: [
         .target(
             name: "OpenPetsCore",
-            path: "Sources/OpenPets"
+            path: "Sources/OpenPets",
+            resources: [
+                .process("Resources")
+            ]
         ),
         .executableTarget(
             name: "OpenPetsCLI",
