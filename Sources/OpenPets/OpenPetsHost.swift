@@ -444,21 +444,23 @@ private final class PetHostView: NSView {
     }
 
     private let spriteView: PetSpriteView
-    private lazy var bubbleView = MessageHostingView(rootView: OpenPetsMessageView(
-        bubble: nil,
-        isCollapsed: false,
-        activeMessageCount: 0,
-        layout: .empty,
-        onToggle: { [weak self] in
-            self?.toggleMessageCollapsed()
-        }
-    ))
+    private lazy var bubbleView: MessageHostingView = {
+        let view = MessageHostingView(rootView: OpenPetsMessageView(
+            bubble: nil,
+            isCollapsed: false,
+            activeMessageCount: 0,
+            layout: .empty,
+            onToggle: {}
+        ))
+        return view
+    }()
     private let spriteSize: CGSize
     private let messageAreaHeight: CGFloat
     private let compactSize: CGSize
     private var isMessageCollapsed = false
     private var activeMessageCount = 0
     private var currentMessageLayout = OpenPetsMessageLayout.empty
+    private var mouseDownInsideToggle = false
 
     init(
         frame: CGRect,
@@ -486,6 +488,29 @@ private final class PetHostView: NSView {
 
     override var isOpaque: Bool {
         false
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if containsToggleHit(point) {
+            return self
+        }
+        return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownInsideToggle = containsToggleHit(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        defer { mouseDownInsideToggle = false }
+
+        if mouseDownInsideToggle, containsToggleHit(point) {
+            toggleMessageCollapsed()
+            return
+        }
+
+        super.mouseUp(with: event)
     }
 
     override func layout() {
@@ -551,6 +576,14 @@ private final class PetHostView: NSView {
             width: spriteSize.width,
             height: spriteSize.height
         )
+    }
+
+    private func containsToggleHit(_ point: NSPoint) -> Bool {
+        guard bubble != nil else { return false }
+        let normalizedPoint = isFlipped
+            ? CGPoint(x: point.x, y: bounds.height - point.y)
+            : point
+        return currentMessageLayout.toggleFrame.contains(normalizedPoint)
     }
 
     private func toggleMessageCollapsed() {
@@ -650,11 +683,15 @@ private final class MessageHostingView: NSHostingView<OpenPetsMessageView> {
     var interactiveRect = CGRect.zero
 
     override func hitTest(_ point: NSPoint) -> NSView? {
+        guard containsToggle(point) else { return nil }
+        return super.hitTest(point)
+    }
+
+    private func containsToggle(_ point: NSPoint) -> Bool {
         let normalizedPoint = isFlipped
             ? CGPoint(x: point.x, y: bounds.height - point.y)
             : point
-        guard interactiveRect.contains(normalizedPoint) else { return nil }
-        return super.hitTest(point)
+        return interactiveRect.contains(normalizedPoint)
     }
 }
 
