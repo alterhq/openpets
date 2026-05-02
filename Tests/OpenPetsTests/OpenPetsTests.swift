@@ -71,6 +71,44 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(PetAnimation.review.frameCount, 6)
     }
 
+    func testDefaultDisplayConfigurationUsesSmallScale() {
+        XCTAssertEqual(OpenPetsDisplayConfiguration.default.scale, 1.0 / 3.0)
+
+        let configuration = OpenPetsHostConfiguration(
+            petDirectoryURL: URL(fileURLWithPath: "/tmp/example-pet")
+        )
+        XCTAssertEqual(configuration.display, .default)
+        XCTAssertEqual(configuration.scale, 1.0 / 3.0)
+        XCTAssertEqual(configuration.positionStoreURL.path, OpenPetsPaths.defaultPositionStoreURL.path)
+    }
+
+    func testOpenPetsConfigurationSavesAndLoadsUserDefaults() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("config.json")
+        let configuration = OpenPetsConfiguration(
+            display: OpenPetsDisplayConfiguration(scale: 0.25, messageAreaHeight: 44),
+            socketPath: "/tmp/openpets-test.sock"
+        )
+
+        try configuration.save(to: url)
+        let reloaded = try OpenPetsConfiguration.load(from: url)
+
+        XCTAssertEqual(reloaded, configuration)
+    }
+
+    func testOpenPetsConfigurationLoadOrCreateDefault() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("nested/config.json")
+
+        let configuration = try OpenPetsConfiguration.loadOrCreateDefault(at: url)
+
+        XCTAssertEqual(configuration.display, .default)
+        XCTAssertEqual(configuration.socketPath, OpenPetsPaths.defaultSocketPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
     func testPetCommandRoundTripCoding() throws {
         let commands: [PetCommand] = [
             .setMessage(text: "hello", ttlSeconds: 2, priority: 3),

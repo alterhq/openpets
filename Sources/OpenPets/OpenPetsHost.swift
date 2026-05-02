@@ -6,19 +6,38 @@ import ImageIO
 public struct OpenPetsHostConfiguration: Sendable {
     public var petDirectoryURL: URL
     public var socketPath: String
-    public var scale: CGFloat
+    public var display: OpenPetsDisplayConfiguration
     public var positionStoreURL: URL
+
+    public var scale: CGFloat {
+        get { display.scale }
+        set { display.scale = newValue }
+    }
 
     public init(
         petDirectoryURL: URL,
         socketPath: String = OpenPetsPaths.defaultSocketPath,
-        scale: CGFloat = 1,
-        positionStoreURL: URL = OpenPetsPaths.defaultApplicationSupportDirectory.appendingPathComponent("positions.json")
+        display: OpenPetsDisplayConfiguration = .default,
+        positionStoreURL: URL = OpenPetsPaths.defaultPositionStoreURL
     ) {
         self.petDirectoryURL = petDirectoryURL
         self.socketPath = socketPath
-        self.scale = scale
+        self.display = display
         self.positionStoreURL = positionStoreURL
+    }
+
+    public init(
+        petDirectoryURL: URL,
+        socketPath: String = OpenPetsPaths.defaultSocketPath,
+        scale: CGFloat,
+        positionStoreURL: URL = OpenPetsPaths.defaultPositionStoreURL
+    ) {
+        self.init(
+            petDirectoryURL: petDirectoryURL,
+            socketPath: socketPath,
+            display: OpenPetsDisplayConfiguration(scale: scale),
+            positionStoreURL: positionStoreURL
+        )
     }
 }
 
@@ -28,7 +47,7 @@ public enum OpenPetsHost {
         let petBundle = try PetBundle.load(from: configuration.petDirectoryURL)
         let controller = try PetHostController(
             petBundle: petBundle,
-            scale: configuration.scale,
+            display: configuration.display,
             positionStore: PetPositionStore(url: configuration.positionStoreURL)
         )
         let bridge = PetHostCommandBridge(controller: controller)
@@ -117,17 +136,22 @@ private final class PetHostController {
     private var currentFrameIndex = 0
     private var loopCurrentAnimation = true
 
-    init(petBundle: PetBundle, scale: CGFloat, positionStore: PetPositionStore) throws {
+    init(petBundle: PetBundle, display: OpenPetsDisplayConfiguration, positionStore: PetPositionStore) throws {
         self.petBundle = petBundle
         self.positionStore = positionStore
 
         let frames = try PetHostController.loadFrames(from: petBundle)
         let spriteSize = CGSize(
-            width: CGFloat(petBundle.atlas.cellWidth) * scale,
-            height: CGFloat(petBundle.atlas.cellHeight) * scale
+            width: CGFloat(petBundle.atlas.cellWidth) * display.scale,
+            height: CGFloat(petBundle.atlas.cellHeight) * display.scale
         )
-        let contentSize = CGSize(width: spriteSize.width, height: spriteSize.height + 72)
-        petView = PetSpriteView(frame: CGRect(origin: .zero, size: contentSize), spriteSize: spriteSize, frames: frames)
+        let contentSize = CGSize(width: spriteSize.width, height: spriteSize.height + display.messageAreaHeight)
+        petView = PetSpriteView(
+            frame: CGRect(origin: .zero, size: contentSize),
+            spriteSize: spriteSize,
+            messageAreaHeight: display.messageAreaHeight,
+            frames: frames
+        )
 
         let initialOrigin = positionStore.loadPosition(forPetID: petBundle.manifest.id)
             ?? PetHostController.defaultWindowOrigin(contentSize: contentSize)
@@ -307,6 +331,7 @@ private final class PetSpriteView: NSView {
     }
 
     private let spriteSize: CGSize
+    private let messageAreaHeight: CGFloat
     private let frames: [PetAnimation: [CGImage]]
     private var currentFrame: CGImage?
     private var mouseDownScreenLocation = CGPoint.zero
@@ -314,8 +339,14 @@ private final class PetSpriteView: NSView {
     private var dragging = false
     private var lastDragAnimation: PetAnimation?
 
-    init(frame: CGRect, spriteSize: CGSize, frames: [PetAnimation: [CGImage]]) {
+    init(
+        frame: CGRect,
+        spriteSize: CGSize,
+        messageAreaHeight: CGFloat,
+        frames: [PetAnimation: [CGImage]]
+    ) {
         self.spriteSize = spriteSize
+        self.messageAreaHeight = messageAreaHeight
         self.frames = frames
         currentFrame = frames[.idle]?.first
         super.init(frame: frame)
@@ -406,7 +437,8 @@ private final class PetSpriteView: NSView {
             .foregroundColor: NSColor.labelColor,
             .paragraphStyle: paragraph
         ]
-        let maxTextSize = CGSize(width: bounds.width - 24, height: 48)
+        let maxBubbleHeight = max(24, messageAreaHeight - 10)
+        let maxTextSize = CGSize(width: bounds.width - 24, height: max(12, maxBubbleHeight - 16))
         let textRect = NSString(string: message).boundingRect(
             with: maxTextSize,
             options: [.usesLineFragmentOrigin, .usesFontLeading],
@@ -414,9 +446,9 @@ private final class PetSpriteView: NSView {
         )
         let bubbleRect = CGRect(
             x: 6,
-            y: bounds.height - min(62, textRect.height + 18),
+            y: bounds.height - min(maxBubbleHeight, textRect.height + 18),
             width: bounds.width - 12,
-            height: min(62, textRect.height + 18)
+            height: min(maxBubbleHeight, textRect.height + 18)
         )
 
         let path = NSBezierPath(roundedRect: bubbleRect, xRadius: 8, yRadius: 8)

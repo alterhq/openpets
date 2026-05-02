@@ -26,16 +26,21 @@ struct OpenPetsCLI {
             guard let petPath = options.values["pet"] else {
                 throw CLIError.missingRequiredOption("--pet")
             }
-            let socketPath = options.values["socket"] ?? OpenPetsPaths.defaultSocketPath
-            let scale = options.values["scale"].flatMap(Double.init).map { CGFloat($0) } ?? 1
+            let userConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
+            let socketPath = options.values["socket"] ?? userConfiguration.socketPath
+            var display = userConfiguration.display
+            if let scale = options.values["scale"].flatMap(Double.init).map({ CGFloat($0) }) {
+                display.scale = scale
+            }
             let configuration = OpenPetsHostConfiguration(
                 petDirectoryURL: URL(fileURLWithPath: petPath).standardizedFileURL,
                 socketPath: socketPath,
-                scale: scale
+                display: display
             )
             try OpenPetsHost.run(configuration: configuration)
 
         case "send":
+            let userConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
             let parsed = parseOptionsAndPositionals(Array(arguments.dropFirst()))
             let message = parsed.positionals.joined(separator: " ")
             guard !message.isEmpty else {
@@ -47,10 +52,11 @@ struct OpenPetsCLI {
                     ttlSeconds: parsed.values["ttl"].flatMap(Double.init),
                     priority: parsed.values["priority"].flatMap(Int.init)
                 ),
-                socketPath: parsed.values["socket"]
+                socketPath: parsed.values["socket"] ?? userConfiguration.socketPath
             )
 
         case "status":
+            let userConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
             let parsed = parseOptionsAndPositionals(Array(arguments.dropFirst()))
             guard let kind = parsed.positionals.first else {
                 throw CLIError.missingArgument("status kind")
@@ -61,10 +67,11 @@ struct OpenPetsCLI {
                     message: parsed.values["message"],
                     ttlSeconds: parsed.values["ttl"].flatMap(Double.init)
                 ),
-                socketPath: parsed.values["socket"]
+                socketPath: parsed.values["socket"] ?? userConfiguration.socketPath
             )
 
         case "animate":
+            let userConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
             let parsed = parseOptionsAndPositionals(Array(arguments.dropFirst()))
             guard let animationName = parsed.positionals.first else {
                 throw CLIError.missingArgument("animation")
@@ -79,20 +86,23 @@ struct OpenPetsCLI {
                     loop: loop,
                     ttlSeconds: parsed.values["ttl"].flatMap(Double.init)
                 ),
-                socketPath: parsed.values["socket"]
+                socketPath: parsed.values["socket"] ?? userConfiguration.socketPath
             )
 
         case "clear":
+            let userConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
             let options = parseOptions(Array(arguments.dropFirst()))
-            try send(.clearMessage, socketPath: options.values["socket"])
+            try send(.clearMessage, socketPath: options.values["socket"] ?? userConfiguration.socketPath)
 
         case "ping":
+            let userConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
             let options = parseOptions(Array(arguments.dropFirst()))
-            try send(.ping, socketPath: options.values["socket"])
+            try send(.ping, socketPath: options.values["socket"] ?? userConfiguration.socketPath)
 
         case "stop":
+            let userConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
             let options = parseOptions(Array(arguments.dropFirst()))
-            try send(.shutdown, socketPath: options.values["socket"])
+            try send(.shutdown, socketPath: options.values["socket"] ?? userConfiguration.socketPath)
 
         case "help", "--help", "-h":
             printUsage()
@@ -118,7 +128,7 @@ struct OpenPetsCLI {
         print(
             """
             Usage:
-              openpets run --pet /Users/sam/.codex/pets/starcorn [--socket PATH] [--scale 1.0]
+              openpets run --pet /Users/sam/.codex/pets/starcorn [--socket PATH] [--scale 0.333]
               openpets send "message text" [--ttl SECONDS] [--priority N] [--socket PATH]
               openpets status KIND [--message TEXT] [--ttl SECONDS] [--socket PATH]
               openpets animate ANIMATION [--loop|--once] [--ttl SECONDS] [--socket PATH]
