@@ -175,7 +175,7 @@ private final class PetHostController {
             self?.play(.waving, loop: false, ttlSeconds: nil)
         }
         petView.onDragDirectionChange = { [weak self] direction in
-            self?.play(direction, loop: true, ttlSeconds: nil)
+            self?.switchDragDirection(to: direction)
         }
         petView.onDragEnd = { [weak self] in
             self?.savePosition()
@@ -228,7 +228,7 @@ private final class PetHostController {
     private func play(_ animation: PetAnimation, loop: Bool, ttlSeconds: Double?) {
         ttlWorkItem?.cancel()
         currentAnimation = animation
-        currentFrameIndex = 0
+        currentFrameIndex = entryFrame(for: animation)
         loopCurrentAnimation = loop
         petView.set(animation: animation, frameIndex: currentFrameIndex)
         scheduleNextFrame()
@@ -241,6 +241,25 @@ private final class PetHostController {
         }
         ttlWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + ttlSeconds, execute: workItem)
+    }
+
+    private func switchDragDirection(to animation: PetAnimation) {
+        ttlWorkItem?.cancel()
+        currentAnimation = animation
+        loopCurrentAnimation = true
+        currentFrameIndex %= animation.frameCount
+        petView.set(animation: animation, frameIndex: currentFrameIndex)
+    }
+
+    private func entryFrame(for animation: PetAnimation) -> Int {
+        switch animation {
+        case .runningRight, .runningLeft:
+            1
+        case .waving, .jumping, .failed:
+            min(1, animation.frameCount - 1)
+        case .idle, .review:
+            0
+        }
     }
 
     private func scheduleNextFrame() {
@@ -335,6 +354,7 @@ private final class PetSpriteView: NSView {
     private let frames: [PetAnimation: [CGImage]]
     private var currentFrame: CGImage?
     private var mouseDownScreenLocation = CGPoint.zero
+    private var previousDragScreenLocation = CGPoint.zero
     private var mouseDownWindowOrigin = CGPoint.zero
     private var dragging = false
     private var lastDragAnimation: PetAnimation?
@@ -389,6 +409,7 @@ private final class PetSpriteView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         mouseDownScreenLocation = NSEvent.mouseLocation
+        previousDragScreenLocation = mouseDownScreenLocation
         mouseDownWindowOrigin = window?.frame.origin ?? .zero
         dragging = false
         lastDragAnimation = nil
@@ -411,8 +432,11 @@ private final class PetSpriteView: NSView {
             y: mouseDownWindowOrigin.y + delta.y
         ))
 
-        guard abs(delta.x) > 2 else { return }
-        let animation: PetAnimation = delta.x >= 0 ? .runningRight : .runningLeft
+        let incrementalX = currentLocation.x - previousDragScreenLocation.x
+        previousDragScreenLocation = currentLocation
+
+        guard abs(incrementalX) > 0.5 else { return }
+        let animation: PetAnimation = incrementalX >= 0 ? .runningRight : .runningLeft
         if animation != lastDragAnimation {
             lastDragAnimation = animation
             onDragDirectionChange?(animation)

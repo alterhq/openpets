@@ -71,6 +71,14 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(PetAnimation.review.frameCount, 6)
     }
 
+    func testIdleAnimationUsesCalmBreathingTiming() {
+        let idleLoopDuration = PetAnimation.idle.frameDurationsMilliseconds.reduce(0, +)
+
+        XCTAssertEqual(idleLoopDuration, 8_000)
+        XCTAssertGreaterThanOrEqual(PetAnimation.idle.frameDurationsMilliseconds.first ?? 0, 2_000)
+        XCTAssertGreaterThanOrEqual(PetAnimation.idle.frameDurationsMilliseconds.last ?? 0, 2_600)
+    }
+
     func testDefaultDisplayConfigurationUsesSmallScale() {
         XCTAssertEqual(OpenPetsDisplayConfiguration.default.scale, 1.0 / 3.0)
 

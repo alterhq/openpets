@@ -27,7 +27,7 @@ public enum PetAnimation: String, Codable, CaseIterable, Sendable {
 
     public var frameDurationsMilliseconds: [Int] {
         switch self {
-        case .idle: [280, 110, 110, 140, 140, 320]
+        case .idle: [2_000, 880, 820, 880, 820, 2_600]
         case .runningRight: [120, 120, 120, 120, 120, 120, 120, 220]
         case .runningLeft: [120, 120, 120, 120, 120, 120, 120, 220]
         case .waving: [140, 140, 140, 280]
