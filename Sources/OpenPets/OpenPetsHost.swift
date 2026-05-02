@@ -141,7 +141,7 @@ private final class PetHostController {
     init(petBundle: PetBundle, display: OpenPetsDisplayConfiguration, positionStore: PetPositionStore) throws {
         self.petBundle = petBundle
         self.positionStore = positionStore
-        messageAreaHeight = max(display.messageAreaHeight, 72)
+        messageAreaHeight = max(display.messageAreaHeight, 84)
 
         let frames = try PetHostController.loadFrames(from: petBundle)
         let spriteSize = CGSize(
@@ -512,17 +512,17 @@ private struct OpenPetsBubbleView: View {
                                 .foregroundStyle(.primary)
                                 .lineLimit(2)
                                 .truncationMode(.tail)
+                                .fixedSize(horizontal: false, vertical: false)
                         }
                     }
 
                     Spacer(minLength: 4)
                     indicator(for: bubble.indicator)
-                        .frame(width: 12, height: 12)
-                        .padding(.top, 3)
+                        .frame(width: 16, height: 16)
                 }
                 .padding(.leading, 14)
                 .padding(.trailing, 12)
-                .padding(.vertical, 8)
+                .padding(.vertical, 6)
                 .frame(width: Self.size(for: bubble).width, height: Self.size(for: bubble).height)
                 .background(background)
                 .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -537,12 +537,38 @@ private struct OpenPetsBubbleView: View {
         }
     }
 
-    static func size(for bubble: PetBubble, maxWidth: CGFloat = 260, messageAreaHeight: CGFloat = 72) -> CGSize {
-        let hasDetail = !(bubble.detail?.isEmpty ?? true)
+    static func size(for bubble: PetBubble, maxWidth: CGFloat = 260, messageAreaHeight: CGFloat = 84) -> CGSize {
+        let width = min(260, maxWidth)
+        let maxHeight = messageAreaHeight - 12
+        guard let detail = bubble.detail, !detail.isEmpty else {
+            return CGSize(width: width, height: min(maxHeight, 44))
+        }
+
+        let bodyLineCount = measuredBodyLineCount(for: detail, bubbleWidth: width)
+        let oneLineBodyHeight: CGFloat = 56
+        let bodyLineHeight: CGFloat = 16
+        let desiredHeight = oneLineBodyHeight + CGFloat(bodyLineCount - 1) * bodyLineHeight
         return CGSize(
-            width: min(260, maxWidth),
-            height: min(messageAreaHeight - 12, hasDetail ? 60 : 44)
+            width: width,
+            height: min(maxHeight, desiredHeight)
         )
+    }
+
+    private static func measuredBodyLineCount(for detail: String, bubbleWidth: CGFloat) -> Int {
+        let bodyWidth = max(1, bubbleWidth - 54)
+        let font = NSFont.systemFont(ofSize: 12.5, weight: .regular)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        let rect = NSString(string: detail).boundingRect(
+            with: CGSize(width: bodyWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [
+                .font: font,
+                .paragraphStyle: paragraph
+            ]
+        )
+        let bodyLineHeight: CGFloat = 15
+        return min(2, max(1, Int(ceil((rect.height - 0.5) / bodyLineHeight))))
     }
 
     private var background: some View {
@@ -555,17 +581,32 @@ private struct OpenPetsBubbleView: View {
         switch indicator {
         case .working:
             ProgressView()
-                .controlSize(.small)
                 .scaleEffect(0.5)
-                .frame(width: 12, height: 12)
+                .opacity(0.7)
         case .success:
             ZStack {
                 Circle()
                     .fill(Color(nsColor: .systemGreen))
                 Image(systemName: "checkmark")
-                    .font(.system(size: 7, weight: .bold))
+                    .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.white)
             }
+        }
+    }
+}
+
+private struct WorkingProgressRing: View {
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            let phase = timeline.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: 1.2) / 1.2
+            let progress = 0.12 + phase * 0.76
+
+            ProgressView(value: progress, total: 1.0)
+                .progressViewStyle(.circular)
+                .controlSize(.small)
+                .scaleEffect(0.7)
+                .frame(width: 16, height: 16)
         }
     }
 }
@@ -681,28 +722,55 @@ private struct OpenPetsMessagingPreviewGallery: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             preview(
-                "Working",
+                "Title Only",
                 bubble: PetBubble(
-                    title: "Working",
-                    detail: "Updating the interface spacing and validating the result.",
+                    title: "Waiting",
+                    detail: nil,
                     indicator: .working
                 ),
                 appearance: .aqua
             )
             preview(
-                "Complete",
+                "One Body Line",
+                bubble: PetBubble(
+                    title: "Working",
+                    detail: "Updating the interface.",
+                    indicator: .working
+                ),
+                appearance: .aqua
+            )
+            preview(
+                "One Body Line Success",
                 bubble: PetBubble(
                     title: "Complete",
-                    detail: "Messaging block layout is ready for review.",
+                    detail: "Layout is ready for review.",
                     indicator: .success
                 ),
                 appearance: .aqua
             )
             preview(
-                "Dark",
+                "Two Body Lines",
+                bubble: PetBubble(
+                    title: "Describe project",
+                    detail: "This project is OpenPets, a macOS Swift package for showing an animated desktop pet while work runs.",
+                    indicator: .working
+                ),
+                appearance: .aqua
+            )
+            preview(
+                "Two Lines Truncated",
+                bubble: PetBubble(
+                    title: "Summarize implementation",
+                    detail: "The bubble should expand to two lines and then truncate any extra copy with an ellipsis so the card stays compact.",
+                    indicator: .working
+                ),
+                appearance: .aqua
+            )
+            preview(
+                "Dark Two Lines Truncated",
                 bubble: PetBubble(
                     title: "Needs attention",
-                    detail: "Longer status copy wraps cleanly without crowding the indicator.",
+                    detail: "Longer status copy wraps cleanly without crowding the indicator, even when there is more detail than the bubble can show.",
                     indicator: .working
                 ),
                 appearance: .darkAqua
