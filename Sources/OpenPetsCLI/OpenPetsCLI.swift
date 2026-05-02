@@ -1,5 +1,5 @@
 import Foundation
-import OpenPets
+import OpenPetsCore
 
 @main
 struct OpenPetsCLI {
@@ -128,7 +128,7 @@ struct OpenPetsCLI {
         print(
             """
             Usage:
-              openpets run --pet /Users/sam/.codex/pets/starcorn [--socket PATH] [--scale 0.333]
+              openpets run --pet /Users/sam/.codex/pets/starcorn [--socket PATH] [--scale 0.42]
               openpets send "message text" [--ttl SECONDS] [--priority N] [--socket PATH]
               openpets status KIND [--message TEXT] [--ttl SECONDS] [--socket PATH]
               openpets animate ANIMATION [--loop|--once] [--ttl SECONDS] [--socket PATH]

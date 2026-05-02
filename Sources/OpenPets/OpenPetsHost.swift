@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
+import SwiftUI
 
 public struct OpenPetsHostConfiguration: Sendable {
     public var petDirectoryURL: URL
@@ -128,7 +129,8 @@ private final class PetHostController {
     private let petBundle: PetBundle
     private let positionStore: PetPositionStore
     private let window: NSPanel
-    private let petView: PetSpriteView
+    private let petView: PetHostView
+    private let messageAreaHeight: CGFloat
     private var animationTimer: Timer?
     private var ttlWorkItem: DispatchWorkItem?
     private var messageWorkItem: DispatchWorkItem?
@@ -139,17 +141,21 @@ private final class PetHostController {
     init(petBundle: PetBundle, display: OpenPetsDisplayConfiguration, positionStore: PetPositionStore) throws {
         self.petBundle = petBundle
         self.positionStore = positionStore
+        messageAreaHeight = max(display.messageAreaHeight, 72)
 
         let frames = try PetHostController.loadFrames(from: petBundle)
         let spriteSize = CGSize(
             width: CGFloat(petBundle.atlas.cellWidth) * display.scale,
             height: CGFloat(petBundle.atlas.cellHeight) * display.scale
         )
-        let contentSize = CGSize(width: spriteSize.width, height: spriteSize.height + display.messageAreaHeight)
-        petView = PetSpriteView(
+        let contentSize = CGSize(
+            width: max(292, spriteSize.width + 96),
+            height: spriteSize.height + messageAreaHeight
+        )
+        petView = PetHostView(
             frame: CGRect(origin: .zero, size: contentSize),
             spriteSize: spriteSize,
-            messageAreaHeight: display.messageAreaHeight,
+            messageAreaHeight: messageAreaHeight,
             frames: frames
         )
 
@@ -194,14 +200,12 @@ private final class PetHostController {
         case .setMessage(let text, let ttlSeconds, _):
             setMessage(text, ttlSeconds: ttlSeconds)
         case .setStatus(let kind, let message, let ttlSeconds):
-            if let message {
-                setMessage(message, ttlSeconds: ttlSeconds)
-            }
+            setBubble(bubble(forStatusKind: kind, message: message), ttlSeconds: ttlSeconds)
             play(animation(forStatusKind: kind), loop: true, ttlSeconds: ttlSeconds)
         case .playAnimation(let name, let loop, let ttlSeconds):
             play(name, loop: loop ?? true, ttlSeconds: ttlSeconds)
         case .clearMessage:
-            setMessage(nil, ttlSeconds: nil)
+            setBubble(nil, ttlSeconds: nil)
         case .ping, .shutdown:
             break
         }
@@ -212,13 +216,17 @@ private final class PetHostController {
     }
 
     private func setMessage(_ text: String?, ttlSeconds: Double?) {
-        messageWorkItem?.cancel()
-        petView.message = text
+        setBubble(bubble(forMessage: text), ttlSeconds: ttlSeconds)
+    }
 
-        guard let ttlSeconds, ttlSeconds > 0, text != nil else { return }
+    private func setBubble(_ bubble: PetBubble?, ttlSeconds: Double?) {
+        messageWorkItem?.cancel()
+        petView.bubble = bubble
+
+        guard let ttlSeconds, ttlSeconds > 0, bubble != nil else { return }
         let workItem = DispatchWorkItem { [weak self] in
             Task { @MainActor in
-                self?.petView.message = nil
+                self?.petView.bubble = nil
             }
         }
         messageWorkItem = workItem
@@ -245,10 +253,16 @@ private final class PetHostController {
 
     private func switchDragDirection(to animation: PetAnimation) {
         ttlWorkItem?.cancel()
+        let previousAnimation = currentAnimation
         currentAnimation = animation
         loopCurrentAnimation = true
-        currentFrameIndex %= animation.frameCount
+        if previousAnimation == .runningRight || previousAnimation == .runningLeft {
+            currentFrameIndex %= animation.frameCount
+        } else {
+            currentFrameIndex = entryFrame(for: animation)
+        }
         petView.set(animation: animation, frameIndex: currentFrameIndex)
+        scheduleNextFrame()
     }
 
     private func entryFrame(for animation: PetAnimation) -> Int {
@@ -305,6 +319,47 @@ private final class PetHostController {
         }
     }
 
+    private func bubble(forMessage text: String?) -> PetBubble? {
+        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+
+        let lines = text
+            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        if lines.count > 1, !lines[1].isEmpty {
+            return PetBubble(title: lines[0], detail: lines[1], indicator: .working)
+        }
+
+        return PetBubble(title: petBundle.manifest.displayName, detail: text, indicator: .working)
+    }
+
+    private func bubble(forStatusKind kind: String, message: String?) -> PetBubble {
+        let normalized = kind.lowercased()
+        let title: String
+        let indicator: PetBubbleIndicator
+
+        switch normalized {
+        case "done", "success", "completed", "complete", "committed":
+            title = "Complete"
+            indicator = .success
+        case "failed", "failure", "error":
+            title = "Needs attention"
+            indicator = .working
+        case "review", "reviewing":
+            title = "Reviewing"
+            indicator = .working
+        case "running", "task", "working":
+            title = "Working"
+            indicator = .working
+        default:
+            title = kind.isEmpty ? petBundle.manifest.displayName : kind.capitalized
+            indicator = .working
+        }
+
+        return PetBubble(title: title, detail: message, indicator: indicator)
+    }
+
     private static func defaultWindowOrigin(contentSize: CGSize) -> CGPoint {
         let screenFrame = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
         return CGPoint(
@@ -339,18 +394,189 @@ private final class PetHostController {
     }
 }
 
+private struct PetBubble {
+    var title: String
+    var detail: String?
+    var indicator: PetBubbleIndicator
+}
+
+private enum PetBubbleIndicator {
+    case working
+    case success
+}
+
+@MainActor
+private final class PetHostView: NSView {
+    var onClick: (() -> Void)? {
+        get { spriteView.onClick }
+        set { spriteView.onClick = newValue }
+    }
+
+    var onDragDirectionChange: ((PetAnimation) -> Void)? {
+        get { spriteView.onDragDirectionChange }
+        set { spriteView.onDragDirectionChange = newValue }
+    }
+
+    var onDragEnd: (() -> Void)? {
+        get { spriteView.onDragEnd }
+        set { spriteView.onDragEnd = newValue }
+    }
+
+    var bubble: PetBubble? {
+        didSet {
+            bubbleView.rootView = OpenPetsBubbleView(bubble: bubble)
+            bubbleView.isHidden = bubble == nil
+            needsLayout = true
+        }
+    }
+
+    private let spriteView: PetSpriteView
+    private let bubbleView = PassthroughHostingView(rootView: OpenPetsBubbleView(bubble: nil))
+    private let messageAreaHeight: CGFloat
+
+    init(
+        frame: CGRect,
+        spriteSize: CGSize,
+        messageAreaHeight: CGFloat,
+        frames: [PetAnimation: [CGImage]]
+    ) {
+        self.messageAreaHeight = messageAreaHeight
+        spriteView = PetSpriteView(frame: frame, spriteSize: spriteSize, frames: frames)
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        addSubview(spriteView)
+        bubbleView.wantsLayer = true
+        bubbleView.layer?.backgroundColor = NSColor.clear.cgColor
+        bubbleView.isHidden = true
+        addSubview(bubbleView)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var isOpaque: Bool {
+        false
+    }
+
+    override func layout() {
+        super.layout()
+        spriteView.frame = bounds
+        guard let bubble else {
+            bubbleView.frame = .zero
+            return
+        }
+        bubbleView.frame = bubbleFrame(for: bubble)
+    }
+
+    func set(animation: PetAnimation, frameIndex: Int) {
+        spriteView.set(animation: animation, frameIndex: frameIndex)
+    }
+
+    private func bubbleFrame(for bubble: PetBubble) -> CGRect {
+        let size = OpenPetsBubbleView.size(for: bubble, maxWidth: bounds.width - 24, messageAreaHeight: messageAreaHeight)
+        return CGRect(
+            x: 12,
+            y: bounds.height - size.height - 6,
+            width: size.width,
+            height: size.height
+        )
+    }
+}
+
+private final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
+private struct OpenPetsBubbleView: View {
+    let bubble: PetBubble?
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Group {
+            if let bubble {
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(bubble.title)
+                            .font(.system(size: 13.5, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+
+                        if let detail = bubble.detail, !detail.isEmpty {
+                            Text(detail)
+                                .font(.system(size: 12.5, weight: .regular))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+                                .truncationMode(.tail)
+                        }
+                    }
+
+                    Spacer(minLength: 4)
+                    indicator(for: bubble.indicator)
+                        .frame(width: 12, height: 12)
+                        .padding(.top, 3)
+                }
+                .padding(.leading, 14)
+                .padding(.trailing, 12)
+                .padding(.vertical, 8)
+                .frame(width: Self.size(for: bubble).width, height: Self.size(for: bubble).height)
+                .background(background)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.55 : 0.35), lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.10), radius: 4, x: 0, y: 1)
+            } else {
+                Color.clear.frame(width: 0, height: 0)
+            }
+        }
+    }
+
+    static func size(for bubble: PetBubble, maxWidth: CGFloat = 260, messageAreaHeight: CGFloat = 72) -> CGSize {
+        let hasDetail = !(bubble.detail?.isEmpty ?? true)
+        return CGSize(
+            width: min(260, maxWidth),
+            height: min(messageAreaHeight - 12, hasDetail ? 60 : 44)
+        )
+    }
+
+    private var background: some View {
+        Color(nsColor: .controlBackgroundColor)
+            .opacity(colorScheme == .dark ? 0.92 : 0.96)
+    }
+
+    @ViewBuilder
+    private func indicator(for indicator: PetBubbleIndicator) -> some View {
+        switch indicator {
+        case .working:
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.5)
+                .frame(width: 12, height: 12)
+        case .success:
+            ZStack {
+                Circle()
+                    .fill(Color(nsColor: .systemGreen))
+                Image(systemName: "checkmark")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+        }
+    }
+}
+
 @MainActor
 private final class PetSpriteView: NSView {
     var onClick: (() -> Void)?
     var onDragDirectionChange: ((PetAnimation) -> Void)?
     var onDragEnd: (() -> Void)?
 
-    var message: String? {
-        didSet { needsDisplay = true }
-    }
-
     private let spriteSize: CGSize
-    private let messageAreaHeight: CGFloat
     private let frames: [PetAnimation: [CGImage]]
     private var currentFrame: CGImage?
     private var mouseDownScreenLocation = CGPoint.zero
@@ -362,11 +588,9 @@ private final class PetSpriteView: NSView {
     init(
         frame: CGRect,
         spriteSize: CGSize,
-        messageAreaHeight: CGFloat,
         frames: [PetAnimation: [CGImage]]
     ) {
         self.spriteSize = spriteSize
-        self.messageAreaHeight = messageAreaHeight
         self.frames = frames
         currentFrame = frames[.idle]?.first
         super.init(frame: frame)
@@ -392,17 +616,8 @@ private final class PetSpriteView: NSView {
         NSColor.clear.setFill()
         dirtyRect.fill()
 
-        if let message, !message.isEmpty {
-            drawMessage(message)
-        }
-
         guard let currentFrame else { return }
-        let spriteRect = CGRect(
-            x: (bounds.width - spriteSize.width) / 2,
-            y: 0,
-            width: spriteSize.width,
-            height: spriteSize.height
-        )
+        let spriteRect = spriteRect()
         NSGraphicsContext.current?.imageInterpolation = .none
         NSImage(cgImage: currentFrame, size: spriteSize).draw(in: spriteRect)
     }
@@ -451,42 +666,64 @@ private final class PetSpriteView: NSView {
         }
     }
 
-    private func drawMessage(_ message: String) {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        paragraph.lineBreakMode = .byWordWrapping
-
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-            .foregroundColor: NSColor.labelColor,
-            .paragraphStyle: paragraph
-        ]
-        let maxBubbleHeight = max(24, messageAreaHeight - 10)
-        let maxTextSize = CGSize(width: bounds.width - 24, height: max(12, maxBubbleHeight - 16))
-        let textRect = NSString(string: message).boundingRect(
-            with: maxTextSize,
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: attributes
-        )
-        let bubbleRect = CGRect(
-            x: 6,
-            y: bounds.height - min(maxBubbleHeight, textRect.height + 18),
-            width: bounds.width - 12,
-            height: min(maxBubbleHeight, textRect.height + 18)
-        )
-
-        let path = NSBezierPath(roundedRect: bubbleRect, xRadius: 8, yRadius: 8)
-        NSColor.windowBackgroundColor.withAlphaComponent(0.94).setFill()
-        path.fill()
-        NSColor.separatorColor.withAlphaComponent(0.7).setStroke()
-        path.lineWidth = 1
-        path.stroke()
-
-        let drawRect = bubbleRect.insetBy(dx: 10, dy: 8)
-        NSString(string: message).draw(
-            with: drawRect,
-            options: [.usesLineFragmentOrigin, .usesFontLeading, .truncatesLastVisibleLine],
-            attributes: attributes
+    private func spriteRect() -> CGRect {
+        CGRect(
+            x: bounds.width - spriteSize.width - 24,
+            y: 0,
+            width: spriteSize.width,
+            height: spriteSize.height
         )
     }
 }
+
+#if DEBUG
+private struct OpenPetsMessagingPreviewGallery: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            preview(
+                "Working",
+                bubble: PetBubble(
+                    title: "Working",
+                    detail: "Updating the interface spacing and validating the result.",
+                    indicator: .working
+                ),
+                appearance: .aqua
+            )
+            preview(
+                "Complete",
+                bubble: PetBubble(
+                    title: "Complete",
+                    detail: "Messaging block layout is ready for review.",
+                    indicator: .success
+                ),
+                appearance: .aqua
+            )
+            preview(
+                "Dark",
+                bubble: PetBubble(
+                    title: "Needs attention",
+                    detail: "Longer status copy wraps cleanly without crowding the indicator.",
+                    indicator: .working
+                ),
+                appearance: .darkAqua
+            )
+        }
+        .padding(16)
+        .frame(width: 324)
+    }
+
+    private func preview(_ title: String, bubble: PetBubble, appearance: NSAppearance.Name) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            OpenPetsBubbleView(bubble: bubble)
+                .environment(\.colorScheme, appearance == .darkAqua ? .dark : .light)
+        }
+    }
+}
+
+#Preview("Messaging Blocks") {
+    OpenPetsMessagingPreviewGallery()
+}
+#endif

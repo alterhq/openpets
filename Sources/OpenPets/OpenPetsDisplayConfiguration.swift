@@ -1,7 +1,7 @@
 import CoreGraphics
 
 public struct OpenPetsDisplayConfiguration: Codable, Equatable, Sendable {
-    public static let defaultScale: CGFloat = 1.0 / 3.0
+    public static let defaultScale: CGFloat = 0.42
     public static let `default` = OpenPetsDisplayConfiguration()
 
     public var scale: CGFloat

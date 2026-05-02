@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
-@testable import OpenPets
+@testable import OpenPetsCore
 import UniformTypeIdentifiers
 import XCTest
 
@@ -80,13 +80,13 @@ final class OpenPetsTests: XCTestCase {
     }
 
     func testDefaultDisplayConfigurationUsesSmallScale() {
-        XCTAssertEqual(OpenPetsDisplayConfiguration.default.scale, 1.0 / 3.0)
+        XCTAssertEqual(OpenPetsDisplayConfiguration.default.scale, 0.42)
 
         let configuration = OpenPetsHostConfiguration(
             petDirectoryURL: URL(fileURLWithPath: "/tmp/example-pet")
         )
         XCTAssertEqual(configuration.display, .default)
-        XCTAssertEqual(configuration.scale, 1.0 / 3.0)
+        XCTAssertEqual(configuration.scale, 0.42)
         XCTAssertEqual(configuration.positionStoreURL.path, OpenPetsPaths.defaultPositionStoreURL.path)
     }
 

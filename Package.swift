@@ -8,22 +8,22 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .library(name: "OpenPets", targets: ["OpenPets"]),
+        .library(name: "OpenPets", targets: ["OpenPetsCore"]),
         .executable(name: "openpets", targets: ["OpenPetsCLI"])
     ],
     targets: [
         .target(
-            name: "OpenPets",
+            name: "OpenPetsCore",
             path: "Sources/OpenPets"
         ),
         .executableTarget(
             name: "OpenPetsCLI",
-            dependencies: ["OpenPets"],
+            dependencies: ["OpenPetsCore"],
             path: "Sources/OpenPetsCLI"
         ),
         .testTarget(
             name: "OpenPetsTests",
-            dependencies: ["OpenPets"]
+            dependencies: ["OpenPetsCore"]
         )
     ]
 )
