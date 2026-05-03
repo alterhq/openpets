@@ -9,7 +9,13 @@ let package = Package(
     ],
     products: [
         .library(name: "OpenPets", targets: ["OpenPetsCore"]),
-        .executable(name: "openpets", targets: ["OpenPetsCLI"])
+        .executable(name: "openpets", targets: ["OpenPetsCLI"]),
+        .executable(name: "openpets-menubar", targets: ["OpenPetsMenuBar"])
+    ],
+    dependencies: [
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.12.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0")
     ],
     targets: [
         .target(
@@ -23,6 +29,18 @@ let package = Package(
             name: "OpenPetsCLI",
             dependencies: ["OpenPetsCore"],
             path: "Sources/OpenPetsCLI"
+        ),
+        .executableTarget(
+            name: "OpenPetsMenuBar",
+            dependencies: [
+                "OpenPetsCore",
+                .product(name: "MCP", package: "swift-sdk"),
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio")
+            ],
+            path: "Sources/OpenPetsMenuBar"
         ),
         .testTarget(
             name: "OpenPetsTests",

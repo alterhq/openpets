@@ -100,7 +100,10 @@ final class OpenPetsTests: XCTestCase {
         let url = directory.appendingPathComponent("config.json")
         let configuration = OpenPetsConfiguration(
             display: OpenPetsDisplayConfiguration(scale: 0.25, messageAreaHeight: 44),
-            socketPath: "/tmp/openpets-test.sock"
+            socketPath: "/tmp/openpets-test.sock",
+            mcpHost: "0.0.0.0",
+            mcpPort: 3999,
+            mcpEndpoint: "/custom-mcp"
         )
 
         try configuration.save(to: url)
@@ -118,7 +121,39 @@ final class OpenPetsTests: XCTestCase {
 
         XCTAssertEqual(configuration.display, .default)
         XCTAssertEqual(configuration.socketPath, OpenPetsPaths.defaultSocketPath)
+        XCTAssertEqual(configuration.mcpHost, "127.0.0.1")
+        XCTAssertEqual(configuration.mcpPort, 3001)
+        XCTAssertEqual(configuration.mcpEndpoint, "/mcp")
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testOpenPetsConfigurationDecodesLegacyFiles() throws {
+        let data = Data(
+            """
+            {
+              "display": {
+                "scale": 0.31,
+                "messageAreaHeight": 48
+              },
+              "socketPath": "/tmp/openpets-legacy.sock"
+            }
+            """.utf8
+        )
+
+        let configuration = try JSONDecoder().decode(OpenPetsConfiguration.self, from: data)
+
+        XCTAssertEqual(configuration.display, OpenPetsDisplayConfiguration(scale: 0.31, messageAreaHeight: 48))
+        XCTAssertEqual(configuration.socketPath, "/tmp/openpets-legacy.sock")
+        XCTAssertEqual(configuration.mcpHost, "127.0.0.1")
+        XCTAssertEqual(configuration.mcpPort, 3001)
+        XCTAssertEqual(configuration.mcpEndpoint, "/mcp")
+    }
+
+    func testBundledStarcornPetLoads() throws {
+        let bundle = try PetBundle.load(from: OpenPetsBundledPets.starcornURL)
+
+        XCTAssertEqual(bundle.manifest.id, "starcorn")
+        XCTAssertEqual(bundle.manifest.displayName, "Starcorn")
     }
 
     func testPetCommandRoundTripCoding() throws {

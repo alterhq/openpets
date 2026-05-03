@@ -45,25 +45,99 @@ public struct OpenPetsHostConfiguration: Sendable {
 public enum OpenPetsHost {
     @MainActor
     public static func run(configuration: OpenPetsHostConfiguration) throws {
+        let session = OpenPetsHostSession(
+            configuration: configuration,
+            terminatesApplicationOnShutdown: true
+        )
+        try session.start()
+        let app = NSApplication.shared
+        let delegate = OpenPetsApplicationDelegate(session: session)
+        OpenPetsRuntime.current = OpenPetsRuntime(delegate: delegate)
+        app.delegate = delegate
+        app.setActivationPolicy(.accessory)
+        app.run()
+    }
+}
+
+@MainActor
+public final class OpenPetsHostSession {
+    public private(set) var configuration: OpenPetsHostConfiguration
+    public let terminatesApplicationOnShutdown: Bool
+    private var controller: PetHostController?
+    private var server: OpenPetsServer?
+
+    public var isRunning: Bool {
+        controller != nil
+    }
+
+    public var petManifest: PetManifest? {
+        controller?.petManifest
+    }
+
+    public init(
+        configuration: OpenPetsHostConfiguration,
+        terminatesApplicationOnShutdown: Bool = false
+    ) {
+        self.configuration = configuration
+        self.terminatesApplicationOnShutdown = terminatesApplicationOnShutdown
+    }
+
+    public func start() throws {
+        guard !isRunning else { return }
+
         let petBundle = try PetBundle.load(from: configuration.petDirectoryURL)
         let controller = try PetHostController(
             petBundle: petBundle,
             display: configuration.display,
             positionStore: PetPositionStore(url: configuration.positionStoreURL)
         )
-        let bridge = PetHostCommandBridge(controller: controller)
+        let bridge = PetHostCommandBridge(session: self)
         let server = OpenPetsServer(socketPath: configuration.socketPath) { command in
             bridge.handle(command)
         }
-        try server.start()
 
-        let app = NSApplication.shared
-        let delegate = OpenPetsApplicationDelegate(server: server, controller: controller)
-        OpenPetsRuntime.current = OpenPetsRuntime(delegate: delegate)
-        app.delegate = delegate
-        app.setActivationPolicy(.accessory)
+        do {
+            try server.start()
+        } catch {
+            controller.close()
+            throw error
+        }
+
+        self.controller = controller
+        self.server = server
         controller.show()
-        app.run()
+    }
+
+    public func stop() {
+        server?.stop()
+        server = nil
+        controller?.savePosition()
+        controller?.close()
+        controller = nil
+    }
+
+    @discardableResult
+    public func handle(_ command: PetCommand) -> PetResponse {
+        switch command {
+        case .ping:
+            return PetResponse(ok: isRunning, message: isRunning ? "pong" : "pet is not running")
+        case .shutdown:
+            stop()
+            if terminatesApplicationOnShutdown {
+                NSApplication.shared.terminate(nil)
+            }
+            return PetResponse(ok: true, message: "shutting down")
+        default:
+            guard let controller else {
+                return PetResponse(ok: false, message: "pet is not running")
+            }
+            controller.apply(command)
+            return PetResponse(ok: true)
+        }
+    }
+
+    public func apply(_ command: PetCommand) -> PetResponse {
+        handle(command)
     }
 }
 
@@ -79,48 +153,42 @@ private final class OpenPetsRuntime {
 
 @MainActor
 private final class OpenPetsApplicationDelegate: NSObject, NSApplicationDelegate {
-    let server: OpenPetsServer
-    let controller: PetHostController
+    let session: OpenPetsHostSession
 
-    init(server: OpenPetsServer, controller: PetHostController) {
-        self.server = server
-        self.controller = controller
+    init(session: OpenPetsHostSession) {
+        self.session = session
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        server.stop()
-        controller.savePosition()
+        session.stop()
     }
 }
 
 private final class PetHostCommandBridge: @unchecked Sendable {
-    @MainActor private let controller: PetHostController
+    @MainActor private let session: OpenPetsHostSession
 
     @MainActor
-    init(controller: PetHostController) {
-        self.controller = controller
+    init(session: OpenPetsHostSession) {
+        self.session = session
     }
 
     func handle(_ command: PetCommand) -> PetResponse {
+        let response: PetResponse
         switch command {
         case .ping:
-            return PetResponse(ok: true, message: "pong")
+            response = PetResponse(ok: true, message: "pong")
         case .shutdown:
-            DispatchQueue.main.async { [self] in
-                Task { @MainActor in
-                    controller.savePosition()
-                    NSApplication.shared.terminate(nil)
-                }
-            }
-            return PetResponse(ok: true, message: "shutting down")
+            response = PetResponse(ok: true, message: "shutting down")
         default:
-            DispatchQueue.main.async { [self] in
-                Task { @MainActor in
-                    controller.apply(command)
-                }
-            }
-            return PetResponse(ok: true)
+            response = PetResponse(ok: true)
         }
+
+        DispatchQueue.main.async { [self] in
+            Task { @MainActor in
+                session.handle(command)
+            }
+        }
+        return response
     }
 }
 
@@ -137,6 +205,10 @@ private final class PetHostController {
     private var currentAnimation: PetAnimation = .idle
     private var currentFrameIndex = 0
     private var remainingAnimationCycles: Int?
+
+    var petManifest: PetManifest {
+        petBundle.manifest
+    }
 
     init(petBundle: PetBundle, display: OpenPetsDisplayConfiguration, positionStore: PetPositionStore) throws {
         self.petBundle = petBundle
@@ -193,6 +265,17 @@ private final class PetHostController {
 
     func show() {
         window.orderFrontRegardless()
+    }
+
+    func close() {
+        animationTimer?.invalidate()
+        animationTimer = nil
+        ttlWorkItem?.cancel()
+        ttlWorkItem = nil
+        messageWorkItem?.cancel()
+        messageWorkItem = nil
+        window.orderOut(nil)
+        window.close()
     }
 
     func apply(_ command: PetCommand) {

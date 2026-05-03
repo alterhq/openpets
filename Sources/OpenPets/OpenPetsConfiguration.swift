@@ -3,13 +3,39 @@ import Foundation
 public struct OpenPetsConfiguration: Codable, Equatable, Sendable {
     public var display: OpenPetsDisplayConfiguration
     public var socketPath: String
+    public var mcpHost: String
+    public var mcpPort: Int
+    public var mcpEndpoint: String
 
     public init(
         display: OpenPetsDisplayConfiguration = .default,
-        socketPath: String = OpenPetsPaths.defaultSocketPath
+        socketPath: String = OpenPetsPaths.defaultSocketPath,
+        mcpHost: String = "127.0.0.1",
+        mcpPort: Int = 3001,
+        mcpEndpoint: String = "/mcp"
     ) {
         self.display = display
         self.socketPath = socketPath
+        self.mcpHost = mcpHost
+        self.mcpPort = mcpPort
+        self.mcpEndpoint = mcpEndpoint
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case display
+        case socketPath
+        case mcpHost
+        case mcpPort
+        case mcpEndpoint
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        display = try container.decodeIfPresent(OpenPetsDisplayConfiguration.self, forKey: .display) ?? .default
+        socketPath = try container.decodeIfPresent(String.self, forKey: .socketPath) ?? OpenPetsPaths.defaultSocketPath
+        mcpHost = try container.decodeIfPresent(String.self, forKey: .mcpHost) ?? "127.0.0.1"
+        mcpPort = try container.decodeIfPresent(Int.self, forKey: .mcpPort) ?? 3001
+        mcpEndpoint = try container.decodeIfPresent(String.self, forKey: .mcpEndpoint) ?? "/mcp"
     }
 
     public static func load(
