@@ -120,7 +120,7 @@ final class OpenPetsTests: XCTestCase {
     }
 
     @MainActor
-    func testStackedMessageLayoutShowsFourBubblesAndOverflowCount() {
+    func testStackedMessageLayoutShowsFourBubblesAndToggleControl() {
         let messages = (1...5).map { index in
             PetMessage(
                 threadId: "thread-\(index)",
@@ -138,9 +138,74 @@ final class OpenPetsTests: XCTestCase {
 
         XCTAssertEqual(layout.cardFrames.count, 4)
         XCTAssertEqual(layout.cardFrames.map(\.maxX), Array(repeating: 304, count: 4))
-        XCTAssertGreaterThan(layout.overflowFrame.height, 0)
-        XCTAssertEqual(layout.overflowFrame.maxX, 304)
+        XCTAssertGreaterThan(layout.toggleFrame.height, 0)
+        XCTAssertEqual(layout.toggleFrame.maxX, 304)
         XCTAssertGreaterThan(layout.containerSize.height, layout.spriteFrame.height)
+    }
+
+    @MainActor
+    func testMessageLayoutShowsToggleControlForSingleBubble() {
+        let layout = OpenPetsMessageLayout.make(
+            messages: [
+                PetMessage(
+                    threadId: "thread-1",
+                    bubble: PetBubble(title: "Message", detail: nil, indicator: .none)
+                )
+            ],
+            hiddenMessageCount: 0,
+            containerWidth: 316,
+            spriteSize: CGSize(width: 112, height: 126),
+            messageAreaHeight: 108
+        )
+
+        XCTAssertGreaterThan(layout.toggleFrame.height, 0)
+        XCTAssertEqual(layout.toggleFrame.maxX, 304)
+        XCTAssertGreaterThan(layout.containerSize.height, layout.spriteFrame.height)
+    }
+
+    @MainActor
+    func testCollapsedMessageLayoutHidesCardsAndKeepsToggleControl() {
+        let messages = (1...3).map { index in
+            PetMessage(
+                threadId: "thread-\(index)",
+                bubble: PetBubble(title: "Message \(index)", detail: nil, indicator: .none)
+            )
+        }
+
+        let layout = OpenPetsMessageLayout.make(
+            messages: messages,
+            hiddenMessageCount: 0,
+            isCollapsed: true,
+            containerWidth: 316,
+            spriteSize: CGSize(width: 112, height: 126),
+            messageAreaHeight: 108
+        )
+
+        XCTAssertTrue(layout.cardFrames.isEmpty)
+        XCTAssertGreaterThan(layout.toggleFrame.height, 0)
+        XCTAssertEqual(layout.toggleFrame.maxX, 304)
+    }
+
+    @MainActor
+    func testMessageCloseButtonFitsInsideCard() {
+        let layout = OpenPetsMessageLayout.make(
+            bubble: PetBubble(title: "Dismiss me", detail: nil, indicator: .none),
+            isCollapsed: false,
+            containerWidth: 316,
+            spriteSize: CGSize(width: 112, height: 126),
+            messageAreaHeight: 108
+        )
+
+        let closeFrame = OpenPetsMessageLayout.closeButtonFrame(in: layout.cardFrame)
+
+        XCTAssertGreaterThan(closeFrame.width, 0)
+        XCTAssertGreaterThan(closeFrame.height, 0)
+        XCTAssertEqual(closeFrame.minX, layout.cardFrame.minX + OpenPetsMessageLayout.closeButtonInset)
+        XCTAssertEqual(closeFrame.maxY, layout.cardFrame.maxY - OpenPetsMessageLayout.closeButtonInset)
+        XCTAssertGreaterThanOrEqual(closeFrame.minX, layout.cardFrame.minX)
+        XCTAssertGreaterThanOrEqual(closeFrame.minY, layout.cardFrame.minY)
+        XCTAssertLessThanOrEqual(closeFrame.maxX, layout.cardFrame.maxX)
+        XCTAssertLessThanOrEqual(closeFrame.maxY, layout.cardFrame.maxY)
     }
 
     func testMCPToolDescriptionsGuideAgentUsage() throws {

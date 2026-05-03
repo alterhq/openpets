@@ -372,6 +372,9 @@ private final class PetHostController {
         petView.onDragEnd = { [weak self] velocity, fallbackAnimation in
             self?.handleDragEnd(releaseVelocity: velocity, fallbackAnimation: fallbackAnimation)
         }
+        petView.onDismissMessage = { [weak self] threadId in
+            self?.clearBubble(threadId: threadId)
+        }
 
         play(.idle, loop: true, ttlSeconds: nil)
     }
@@ -802,6 +805,8 @@ private final class PetHostView: NSView {
         set { spriteView.onDragEnd = newValue }
     }
 
+    var onDismissMessage: ((String) -> Void)?
+
     var visibleSpriteFrame: CGRect {
         spriteView.spriteFrame
     }
@@ -811,8 +816,12 @@ private final class PetHostView: NSView {
         let view = MessageHostingView(rootView: OpenPetsMessageView(
             messages: [],
             hiddenMessageCount: 0,
+            isCollapsed: false,
+            activeMessageCount: 0,
             layout: .empty,
-            cardFrames: []
+            cardFrames: [],
+            onDismiss: { _ in },
+            onToggle: {}
         ))
         return view
     }()
@@ -820,7 +829,14 @@ private final class PetHostView: NSView {
     private let messageAreaHeight: CGFloat
     private let compactSize: CGSize
     private var messageStack = PetMessageStack()
+    private var isMessageStackCollapsed = false
     private var currentMessageLayout = OpenPetsMessageLayout.empty
+    private var mouseDownMessageTarget: MessageMouseTarget?
+
+    private enum MessageMouseTarget: Equatable {
+        case toggle
+        case dismiss(String)
+    }
 
     init(
         frame: CGRect,
@@ -850,6 +866,33 @@ private final class PetHostView: NSView {
         false
     }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if messageMouseTarget(at: point) != nil {
+            return self
+        }
+        return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownMessageTarget = messageMouseTarget(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let target = messageMouseTarget(at: convert(event.locationInWindow, from: nil))
+        defer { mouseDownMessageTarget = nil }
+
+        guard let mouseDownMessageTarget, mouseDownMessageTarget == target else {
+            return
+        }
+
+        switch mouseDownMessageTarget {
+        case .toggle:
+            toggleMessageStackCollapsed()
+        case .dismiss(let threadId):
+            onDismissMessage?(threadId)
+        }
+    }
+
     override func layout() {
         super.layout()
         let visibleMessages = messageStack.visibleMessages()
@@ -857,7 +900,9 @@ private final class PetHostView: NSView {
             spriteView.frame = bounds
             spriteView.spriteFrame = defaultSpriteFrame(in: bounds)
             bubbleView.frame = .zero
-            bubbleView.actionRects = []
+            bubbleView.interactiveRects = []
+            bubbleView.dismissRegions = []
+            isMessageStackCollapsed = false
             currentMessageLayout = .empty
             return
         }
@@ -865,9 +910,7 @@ private final class PetHostView: NSView {
         spriteView.frame = bounds
         spriteView.spriteFrame = currentMessageLayout.spriteFrame
         bubbleView.frame = bounds
-        bubbleView.actionRects = zip(visibleMessages, currentMessageLayout.cardFrames).compactMap { message, frame in
-            message.bubble.action == nil ? nil : frame
-        }
+        updateMessageHitRegions(messages: visibleMessages, layout: currentMessageLayout)
         updateMessageView(
             messages: visibleMessages,
             hiddenMessageCount: messageStack.hiddenMessageCount(),
@@ -886,6 +929,9 @@ private final class PetHostView: NSView {
 
     func clearBubble(threadId: String) {
         messageStack.clearBubble(threadId: threadId)
+        if messageStack.activeCount == 0 {
+            isMessageStackCollapsed = false
+        }
         relayoutMessages()
     }
 
@@ -894,10 +940,14 @@ private final class PetHostView: NSView {
         if !visibleMessages.isEmpty, !bounds.isEmpty {
             let size = resizeWindowToPreferredSize(for: visibleMessages)
             currentMessageLayout = messageLayout(for: visibleMessages, containerSize: size)
+            bubbleView.frame = CGRect(origin: .zero, size: size)
         } else {
             _ = resizeWindowToPreferredSize(for: [])
             currentMessageLayout = .empty
+            bubbleView.frame = .zero
+            isMessageStackCollapsed = false
         }
+        updateMessageHitRegions(messages: visibleMessages, layout: currentMessageLayout)
         updateMessageView(
             messages: visibleMessages,
             hiddenMessageCount: messageStack.hiddenMessageCount(),
@@ -910,6 +960,7 @@ private final class PetHostView: NSView {
         OpenPetsMessageLayout.make(
             messages: messages,
             hiddenMessageCount: messageStack.hiddenMessageCount(),
+            isCollapsed: isMessageStackCollapsed,
             containerWidth: containerSize.width,
             spriteSize: spriteSize,
             messageAreaHeight: messageAreaHeight
@@ -958,37 +1009,86 @@ private final class PetHostView: NSView {
         bubbleView.rootView = OpenPetsMessageView(
             messages: messages,
             hiddenMessageCount: hiddenMessageCount,
+            isCollapsed: isMessageStackCollapsed,
+            activeMessageCount: messageStack.activeCount,
             layout: layout,
-            cardFrames: layout.cardFrames
+            cardFrames: layout.cardFrames,
+            onDismiss: { [weak self] threadId in
+                self?.onDismissMessage?(threadId)
+            },
+            onToggle: { [weak self] in
+                self?.toggleMessageStackCollapsed()
+            }
         )
         bubbleView.isHidden = messages.isEmpty
+    }
+
+    private func updateMessageHitRegions(messages: [PetMessage], layout: OpenPetsMessageLayout) {
+        bubbleView.interactiveRects = layout.cardFrames + (layout.toggleFrame.isEmpty ? [] : [layout.toggleFrame])
+        bubbleView.dismissRegions = zip(messages, layout.cardFrames).map { message, cardFrame in
+            MessageHostingView.InteractiveRegion(
+                threadId: message.threadId,
+                cardFrame: cardFrame,
+                closeButtonFrame: OpenPetsMessageLayout.closeButtonFrame(in: cardFrame)
+            )
+        }
+        bubbleView.onDismissMessage = { [weak self] threadId in
+            self?.onDismissMessage?(threadId)
+        }
+    }
+
+    private func messageMouseTarget(at point: NSPoint) -> MessageMouseTarget? {
+        let normalizedPoint = isFlipped
+            ? CGPoint(x: point.x, y: bounds.height - point.y)
+            : point
+        if currentMessageLayout.toggleFrame.contains(normalizedPoint), messageStack.activeCount > 0 {
+            return .toggle
+        }
+        if let dismissRegion = bubbleView.dismissRegions.first(where: { $0.closeButtonFrame.contains(normalizedPoint) }) {
+            return .dismiss(dismissRegion.threadId)
+        }
+        return nil
+    }
+
+    private func toggleMessageStackCollapsed() {
+        guard messageStack.activeCount > 0 else { return }
+        isMessageStackCollapsed.toggle()
+        relayoutMessages()
     }
 }
 
 struct OpenPetsMessageLayout {
+    static let toggleDiameter: CGFloat = 36
     static let verticalGap: CGFloat = 10
     static let stackGap: CGFloat = 6
+    static let toggleGapBelowCard: CGFloat = 4
     static let sideInset: CGFloat = 12
     static let maxCardWidth: CGFloat = 260
-    static let overflowSize = CGSize(width: 44, height: 24)
+    static let closeButtonSize = CGSize(width: 22, height: 22)
+    static let closeButtonInset: CGFloat = 8
     static let empty = OpenPetsMessageLayout(
         containerSize: .zero,
         cardFrames: [],
         spriteFrame: .zero,
-        overflowFrame: .zero
+        toggleFrame: .zero
     )
 
     var containerSize: CGSize
     var cardFrames: [CGRect]
     var spriteFrame: CGRect
-    var overflowFrame: CGRect
+    var toggleFrame: CGRect
 
     var cardFrame: CGRect {
         cardFrames.first ?? .zero
     }
 
-    var toggleFrame: CGRect {
-        overflowFrame
+    static func closeButtonFrame(in cardFrame: CGRect) -> CGRect {
+        CGRect(
+            x: cardFrame.minX + closeButtonInset,
+            y: cardFrame.maxY - closeButtonInset - closeButtonSize.height,
+            width: closeButtonSize.width,
+            height: closeButtonSize.height
+        )
     }
 
     @MainActor
@@ -1003,6 +1103,7 @@ struct OpenPetsMessageLayout {
         return make(
             messages: [PetMessage(threadId: "preview", bubble: bubble)],
             hiddenMessageCount: 0,
+            isCollapsed: isCollapsed,
             containerWidth: containerWidth,
             spriteSize: spriteSize,
             messageAreaHeight: messageAreaHeight
@@ -1013,6 +1114,7 @@ struct OpenPetsMessageLayout {
     static func make(
         messages: [PetMessage],
         hiddenMessageCount: Int,
+        isCollapsed: Bool = false,
         containerWidth: CGFloat,
         spriteSize: CGSize,
         messageAreaHeight: CGFloat
@@ -1028,7 +1130,7 @@ struct OpenPetsMessageLayout {
         var cardFrames: [CGRect] = []
         var nextY = spriteFrame.maxY + verticalGap
 
-        for message in messages {
+        for message in isCollapsed ? [] : messages {
             let cardSize = OpenPetsBubbleContentView.size(
                 for: message.bubble,
                 maxWidth: cardMaxWidth,
@@ -1043,69 +1145,119 @@ struct OpenPetsMessageLayout {
             nextY += cardSize.height + stackGap
         }
 
-        let overflowFrame: CGRect
-        if hiddenMessageCount > 0 {
-            overflowFrame = CGRect(
-                x: rightEdge - overflowSize.width,
-                y: nextY,
-                width: overflowSize.width,
-                height: overflowSize.height
-            )
-            nextY += overflowSize.height
+        let toggleFrame: CGRect
+        if messages.isEmpty {
+            toggleFrame = .zero
         } else {
-            overflowFrame = .zero
-            if !cardFrames.isEmpty {
-                nextY -= stackGap
-            }
+            let bottomCardMinY = cardFrames.first?.minY ?? spriteFrame.maxY + verticalGap
+            toggleFrame = CGRect(
+                x: rightEdge - toggleDiameter,
+                y: bottomCardMinY - toggleDiameter - toggleGapBelowCard,
+                width: toggleDiameter,
+                height: toggleDiameter
+            )
         }
 
-        let contentHeight = messages.isEmpty
-            ? spriteSize.height
-            : max(spriteSize.height, nextY)
+        if !cardFrames.isEmpty {
+            nextY -= stackGap
+        }
+
+        let contentHeight: CGFloat
+        if messages.isEmpty {
+            contentHeight = spriteSize.height
+        } else if isCollapsed {
+            contentHeight = max(spriteSize.height + toggleDiameter / 2, toggleFrame.maxY)
+        } else {
+            contentHeight = max(spriteSize.height, nextY)
+        }
 
         return OpenPetsMessageLayout(
             containerSize: CGSize(width: containerWidth, height: contentHeight),
             cardFrames: cardFrames,
             spriteFrame: spriteFrame,
-            overflowFrame: overflowFrame
+            toggleFrame: toggleFrame
         )
     }
+
 }
 
 private final class MessageHostingView: NSHostingView<OpenPetsMessageView> {
-    var actionRects: [CGRect] = []
+    struct InteractiveRegion {
+        var threadId: String
+        var cardFrame: CGRect
+        var closeButtonFrame: CGRect
+    }
+
+    var interactiveRects: [CGRect] = []
+    var dismissRegions: [InteractiveRegion] = []
+    var onDismissMessage: ((String) -> Void)?
+    private var mouseDownDismissThreadId: String?
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard containsInteractiveContent(point) else { return nil }
-        return super.hitTest(point)
+        return super.hitTest(point) ?? self
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownDismissThreadId = dismissThreadId(for: event)
+        super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { mouseDownDismissThreadId = nil }
+        guard
+            let mouseDownDismissThreadId,
+            dismissThreadId(for: event) == mouseDownDismissThreadId
+        else {
+            super.mouseUp(with: event)
+            return
+        }
+
+        onDismissMessage?(mouseDownDismissThreadId)
     }
 
     private func containsInteractiveContent(_ point: NSPoint) -> Bool {
-        let normalizedPoint = isFlipped
+        let normalizedPoint = layoutPoint(fromViewPoint: point)
+        return interactiveRects.contains { $0.contains(normalizedPoint) }
+    }
+
+    private func dismissThreadId(for event: NSEvent) -> String? {
+        let point = convert(event.locationInWindow, from: nil)
+        let layoutPoint = layoutPoint(fromViewPoint: point)
+        return dismissRegions.first { $0.closeButtonFrame.contains(layoutPoint) }?.threadId
+    }
+
+    private func layoutPoint(fromViewPoint point: NSPoint) -> CGPoint {
+        isFlipped
             ? CGPoint(x: point.x, y: bounds.height - point.y)
             : point
-        return actionRects.contains { $0.contains(normalizedPoint) }
     }
 }
 
 private struct OpenPetsMessageView: View {
     let messages: [PetMessage]
     let hiddenMessageCount: Int
+    let isCollapsed: Bool
+    let activeMessageCount: Int
     let layout: OpenPetsMessageLayout
     let cardFrames: [CGRect]
+    let onDismiss: (String) -> Void
+    let onToggle: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Group {
             if !messages.isEmpty {
                 ZStack(alignment: .topLeading) {
-                    ForEach(Array(zip(messages, cardFrames)), id: \.0.threadId) { message, frame in
-                        OpenPetsBubbleContentView(bubble: message.bubble)
-                            .position(swiftUIPosition(for: frame))
+                    if !isCollapsed {
+                        ForEach(Array(zip(messages, cardFrames)), id: \.0.threadId) { message, frame in
+                            OpenPetsDismissibleBubbleView(message: message, onDismiss: onDismiss)
+                                .position(swiftUIPosition(for: frame))
+                        }
                     }
-                    if hiddenMessageCount > 0 {
-                        overflowPill
-                            .position(swiftUIPosition(for: layout.overflowFrame))
+                    if !layout.toggleFrame.isEmpty {
+                        toggleButton
+                            .position(swiftUIPosition(for: layout.toggleFrame))
                     }
                 }
                 .frame(
@@ -1126,20 +1278,78 @@ private struct OpenPetsMessageView: View {
         )
     }
 
-    private var overflowPill: some View {
-        Text("+\(min(hiddenMessageCount, 99))")
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(.secondary)
-            .frame(width: OpenPetsMessageLayout.overflowSize.width, height: OpenPetsMessageLayout.overflowSize.height)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(colorScheme == .dark ? 0.96 : 0.98))
-            .clipShape(Capsule())
-            .overlay {
-                Capsule()
+    private var toggleButton: some View {
+        Button(action: onToggle) {
+            ZStack {
+                Circle()
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(colorScheme == .dark ? 0.96 : 0.98))
+                Circle()
                     .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.6 : 0.35), lineWidth: 1)
+
+                if isCollapsed {
+                    Text("\(min(max(activeMessageCount, 1), 99))")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                } else {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
             }
-            .shadow(color: .black.opacity(colorScheme == .dark ? 0.20 : 0.07), radius: 3, x: 0, y: 1)
-            .accessibilityLabel("\(hiddenMessageCount) hidden messages")
+            .frame(width: OpenPetsMessageLayout.toggleDiameter, height: OpenPetsMessageLayout.toggleDiameter)
+            .contentShape(Circle())
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0.24 : 0.08), radius: 3, x: 0, y: 1)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isCollapsed ? "Show messages" : "Hide messages")
+        .accessibilityValue(isCollapsed ? "\(activeMessageCount) active" : "")
+    }
+}
+
+private struct OpenPetsDismissibleBubbleView: View {
+    let message: PetMessage
+    let onDismiss: (String) -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovered = false
+
+    var body: some View {
+        OpenPetsBubbleContentView(bubble: message.bubble)
+            .overlay(alignment: .topLeading) {
+                if isHovered {
+                    Button {
+                        onDismiss(message.threadId)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .frame(
+                                width: OpenPetsMessageLayout.closeButtonSize.width,
+                                height: OpenPetsMessageLayout.closeButtonSize.height
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .background(closeButtonBackground)
+                    .clipShape(Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.55 : 0.35), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(colorScheme == .dark ? 0.20 : 0.07), radius: 2, x: 0, y: 1)
+                    .padding(.top, OpenPetsMessageLayout.closeButtonInset)
+                    .padding(.leading, OpenPetsMessageLayout.closeButtonInset)
+                    .accessibilityLabel("Dismiss message")
+                }
+            }
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                isHovered = hovering
+            }
+    }
+
+    private var closeButtonBackground: some View {
+        Color(nsColor: colorScheme == .dark ? .black : .white)
+            .opacity(colorScheme == .dark ? 0.82 : 0.94)
     }
 }
 
@@ -1584,8 +1794,12 @@ private struct OpenPetsMessagingPreviewGallery: View {
                 OpenPetsMessageView(
                     messages: [PetMessage(threadId: "preview", bubble: bubble)],
                     hiddenMessageCount: isCollapsed ? activeMessageCount : 0,
+                    isCollapsed: isCollapsed,
+                    activeMessageCount: activeMessageCount,
                     layout: layout,
-                    cardFrames: layout.cardFrames
+                    cardFrames: layout.cardFrames,
+                    onDismiss: { _ in },
+                    onToggle: {}
                 )
             }
             .frame(width: layout.containerSize.width, height: layout.containerSize.height)
