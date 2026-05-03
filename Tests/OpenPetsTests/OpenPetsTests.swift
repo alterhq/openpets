@@ -164,6 +164,33 @@ final class OpenPetsTests: XCTestCase {
     }
 
     @MainActor
+    func testBubbleActionDoesNotIncreaseMessageCardHeight() {
+        let plainBubble = PetBubble(title: "Review ready", detail: nil, indicator: .none)
+        let actionBubble = PetBubble(
+            title: "Review ready",
+            detail: nil,
+            indicator: .none,
+            action: PetBubbleAction(label: "Review", url: try! XCTUnwrap(URL(string: "openpets://review")))
+        )
+        let plainLayout = OpenPetsMessageLayout.make(
+            messages: [PetMessage(threadId: "plain", bubble: plainBubble)],
+            hiddenMessageCount: 0,
+            containerWidth: 316,
+            spriteSize: CGSize(width: 112, height: 126),
+            messageAreaHeight: 108
+        )
+        let actionLayout = OpenPetsMessageLayout.make(
+            messages: [PetMessage(threadId: "action", bubble: actionBubble)],
+            hiddenMessageCount: 0,
+            containerWidth: 316,
+            spriteSize: CGSize(width: 112, height: 126),
+            messageAreaHeight: 108
+        )
+
+        XCTAssertEqual(actionLayout.cardFrame.height, plainLayout.cardFrame.height)
+    }
+
+    @MainActor
     func testCollapsedMessageLayoutHidesCardsAndKeepsToggleControl() {
         let messages = (1...3).map { index in
             PetMessage(
@@ -238,6 +265,11 @@ final class OpenPetsTests: XCTestCase {
         let clearThreadSchema = try schemaProperty(toolName: "clear_pet_message", propertyName: "threadId")
         XCTAssertEqual(clearThreadSchema["type"]?.stringValue, "string")
         XCTAssertEqual(try schemaRequired(toolName: "clear_pet_message"), ["threadId"])
+
+        let urlSchema = try schemaProperty(toolName: "notify", propertyName: "url")
+        let urlDescription = try XCTUnwrap(urlSchema["description"]?.stringValue)
+        XCTAssertEqual(urlSchema["type"]?.stringValue, "string")
+        XCTAssertTrue(urlDescription.contains("Optional URL"))
     }
 
     func testMCPNotifyResultReturnsThreadStructuredContent() throws {
@@ -466,7 +498,7 @@ final class OpenPetsTests: XCTestCase {
                 text: "Changes are ready to inspect.",
                 status: "review",
                 threadId: "11111111-1111-4111-8111-111111111111",
-                xURLCallback: "openpets://review?id=123",
+                url: "https://example.com/review?id=123",
                 buttonLabel: "Review",
                 ttlSeconds: 30
             )),
@@ -483,12 +515,12 @@ final class OpenPetsTests: XCTestCase {
         }
     }
 
-    func testPetNotificationUsesXURLCallbackCodingKey() throws {
+    func testPetNotificationUsesURLCodingKey() throws {
         let notification = PetNotification(
             title: "Reply needed",
             text: "A user asked a follow-up.",
             status: "reply",
-            xURLCallback: "openpets://reply?id=42",
+            url: "https://example.com/reply?id=42",
             buttonLabel: "Reply",
             ttlSeconds: 10
         )
@@ -496,7 +528,8 @@ final class OpenPetsTests: XCTestCase {
         let data = try JSONEncoder().encode(notification)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
-        XCTAssertEqual(json["x-url-callback"] as? String, "openpets://reply?id=42")
+        XCTAssertEqual(json["url"] as? String, "https://example.com/reply?id=42")
+        XCTAssertNil(json["x-url-callback"])
 
         let decoded = try JSONDecoder().decode(PetNotification.self, from: data)
         XCTAssertEqual(decoded, notification)

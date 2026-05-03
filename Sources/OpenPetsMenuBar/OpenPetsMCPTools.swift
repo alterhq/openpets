@@ -80,7 +80,7 @@ func openPetsTools() -> [Tool] {
                         type: "string",
                         description: "Optional UUID for an existing notification thread. Omit only for the first notify call of a distinct task or agent run. Store the returned threadId and pass it on all later notify calls for that same task so OpenPets replaces the right bubble."
                     ),
-                    "x-url-callback": property(
+                    "url": property(
                         type: "string",
                         description: "Optional URL opened when the bubble action button is clicked. Use only for an actionable destination."
                     ),
@@ -171,7 +171,7 @@ private func callOpenPetsTool(
                 text: text,
                 status: status,
                 threadId: arguments["threadId"]?.stringValue,
-                xURLCallback: arguments["x-url-callback"]?.stringValue,
+                url: arguments["url"]?.stringValue,
                 buttonLabel: arguments["buttonLabel"]?.stringValue,
                 ttlSeconds: number(arguments["ttlSeconds"])
             )

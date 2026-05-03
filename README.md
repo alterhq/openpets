@@ -226,7 +226,7 @@ See `CONTRIBUTING.md` for contributor setup, workflow, and pull request guidance
 
 ## Security
 
-OpenPets is intended to run locally. Be careful when enabling network access for the MCP server or passing callback URLs to notifications. Please report security issues privately to the maintainers.
+OpenPets is intended to run locally. Be careful when enabling network access for the MCP server or passing URLs to notifications. Please report security issues privately to the maintainers.
 
 ## License
 

@@ -5,7 +5,7 @@ public struct PetNotification: Codable, Equatable, Sendable {
     public var text: String?
     public var status: String
     public var threadId: String?
-    public var xURLCallback: String?
+    public var url: String?
     public var buttonLabel: String?
     public var ttlSeconds: Double?
 
@@ -14,7 +14,7 @@ public struct PetNotification: Codable, Equatable, Sendable {
         text: String? = nil,
         status: String,
         threadId: String? = nil,
-        xURLCallback: String? = nil,
+        url: String? = nil,
         buttonLabel: String? = nil,
         ttlSeconds: Double? = nil
     ) {
@@ -22,7 +22,7 @@ public struct PetNotification: Codable, Equatable, Sendable {
         self.text = text
         self.status = status
         self.threadId = threadId
-        self.xURLCallback = xURLCallback
+        self.url = url
         self.buttonLabel = buttonLabel
         self.ttlSeconds = ttlSeconds
     }
@@ -32,7 +32,7 @@ public struct PetNotification: Codable, Equatable, Sendable {
         case text
         case status
         case threadId
-        case xURLCallback = "x-url-callback"
+        case url
         case buttonLabel
         case ttlSeconds
     }

@@ -655,15 +655,16 @@ private final class PetHostController {
 
     private func action(for notification: PetNotification) -> PetBubbleAction? {
         guard
-            let callback = notification.xURLCallback,
-            let url = URL(string: callback)
+            let actionURL = notification.url?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !actionURL.isEmpty,
+            let url = URL(string: actionURL)
         else {
             return nil
         }
 
         let label = notification.buttonLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
         return PetBubbleAction(
-            label: label?.isEmpty == false ? label! : "Open",
+            label: label?.isEmpty == false ? label! : "open",
             url: url
         )
     }
@@ -1314,7 +1315,7 @@ private struct OpenPetsDismissibleBubbleView: View {
     @State private var isHovered = false
 
     var body: some View {
-        OpenPetsBubbleContentView(bubble: message.bubble)
+        OpenPetsBubbleContentView(bubble: message.bubble, showsAction: isHovered)
             .overlay(alignment: .topLeading) {
                 if isHovered {
                     Button {
@@ -1355,26 +1356,11 @@ private struct OpenPetsDismissibleBubbleView: View {
 
 private struct OpenPetsBubbleContentView: View {
     let bubble: PetBubble
+    var showsAction = true
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: bubble.action == nil ? 1 : 5) {
-            if let action = bubble.action {
-                Button {
-                    NSWorkspace.shared.open(action.url)
-                } label: {
-                    Text(action.label)
-                        .font(.system(size: 11, weight: .semibold))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.mini)
-                .fixedSize(horizontal: true, vertical: true)
-            }
-
+        VStack(alignment: .leading, spacing: 1) {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(bubble.title)
@@ -1410,21 +1396,27 @@ private struct OpenPetsBubbleContentView: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.55 : 0.35), lineWidth: 1)
         }
+        .overlay(alignment: .bottomTrailing) {
+            if showsAction, let action = bubble.action {
+                actionButton(action)
+                    .padding(.trailing, 8)
+                    .padding(.bottom, 6)
+            }
+        }
         .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.10), radius: 4, x: 0, y: 1)
     }
 
     static func size(for bubble: PetBubble, maxWidth: CGFloat = 260, messageAreaHeight: CGFloat = 84) -> CGSize {
         let width = min(260, maxWidth)
         let maxHeight = messageAreaHeight - 12
-        let actionHeight: CGFloat = bubble.action == nil ? 0 : 25
         guard let detail = bubble.detail, !detail.isEmpty else {
-            return CGSize(width: width, height: min(maxHeight, 44 + actionHeight))
+            return CGSize(width: width, height: min(maxHeight, 44))
         }
 
         let bodyLineCount = measuredBodyLineCount(for: detail, bubbleWidth: width)
         let oneLineBodyHeight: CGFloat = 56
         let bodyLineHeight: CGFloat = 16
-        let desiredHeight = oneLineBodyHeight + actionHeight + CGFloat(bodyLineCount - 1) * bodyLineHeight
+        let desiredHeight = oneLineBodyHeight + CGFloat(bodyLineCount - 1) * bodyLineHeight
         return CGSize(
             width: width,
             height: min(maxHeight, desiredHeight)
@@ -1451,6 +1443,39 @@ private struct OpenPetsBubbleContentView: View {
     private var background: some View {
         Color(nsColor: .controlBackgroundColor)
             .opacity(colorScheme == .dark ? 0.92 : 0.96)
+    }
+
+    private func actionButton(_ action: PetBubbleAction) -> some View {
+        Button {
+            openActionURL(action.url)
+        } label: {
+            Text(action.label)
+                .font(.system(size: 10.5, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 7)
+                .frame(height: 20)
+        }
+        .buttonStyle(.plain)
+        .background(Color(nsColor: colorScheme == .dark ? .black : .white).opacity(colorScheme == .dark ? 0.82 : 0.94))
+        .clipShape(Capsule())
+        .overlay {
+            Capsule()
+                .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.55 : 0.35), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(colorScheme == .dark ? 0.16 : 0.06), radius: 2, x: 0, y: 1)
+        .accessibilityLabel(action.label)
+    }
+
+    private func openActionURL(_ url: URL) {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.open(url, configuration: configuration) { _, error in
+            if let error {
+                NSLog("OpenPets could not open action URL \(url.absoluteString): \(error.localizedDescription)")
+            }
+        }
     }
 
     @ViewBuilder

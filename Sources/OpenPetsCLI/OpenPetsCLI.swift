@@ -69,7 +69,7 @@ struct OpenPetsCLI {
                     text: text.isEmpty ? nil : text,
                     status: status,
                     threadId: parsed.values["thread"],
-                    xURLCallback: parsed.values["callback"] ?? parsed.values["x-url-callback"],
+                    url: parsed.values["url"],
                     buttonLabel: parsed.values["button"],
                     ttlSeconds: parsed.values["ttl"].flatMap(Double.init)
                 )),
@@ -141,7 +141,7 @@ struct OpenPetsCLI {
             Usage:
               openpets run --pet /Users/sam/.codex/pets/starcorn [--socket PATH] [--scale 0.42]
               openpets install URL_OR_PET_ID [--no-activate]
-              openpets notify --title TITLE --status KIND [--text TEXT] [--thread UUID] [--callback URL] [--button LABEL] [--ttl SECONDS] [--socket PATH]
+              openpets notify --title TITLE --status KIND [--text TEXT] [--thread UUID] [--url URL] [--button LABEL] [--ttl SECONDS] [--socket PATH]
               openpets animate ANIMATION [--loop|--once] [--ttl SECONDS] [--socket PATH]
               openpets clear --thread UUID [--socket PATH]
               openpets ping [--socket PATH]
