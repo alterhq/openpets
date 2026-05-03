@@ -31,4 +31,8 @@ public enum OpenPetsPaths {
             ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         return base.appendingPathComponent("OpenPets", isDirectory: true)
     }
+
+    public static var defaultInstalledPetsDirectory: URL {
+        defaultApplicationSupportDirectory.appendingPathComponent("Pets", isDirectory: true)
+    }
 }

@@ -119,7 +119,6 @@ final class OpenPetsTests: XCTestCase {
         }
     }
 
-
     @MainActor
     func testStackedMessageLayoutShowsFourBubblesAndOverflowCount() {
         let messages = (1...5).map { index in
@@ -163,7 +162,6 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(descriptions["clear_pet_message"]).contains("do not clear another task"))
         XCTAssertTrue(try XCTUnwrap(descriptions["ping_pet"]).contains("connectivity check"))
     }
-
 
     func testMCPNotifyAndClearThreadSchemas() throws {
         let threadSchema = try schemaProperty(toolName: "notify", propertyName: "threadId")
@@ -315,6 +313,7 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(configuration.mcpHost, "127.0.0.1")
         XCTAssertEqual(configuration.mcpPort, 3001)
         XCTAssertEqual(configuration.mcpEndpoint, "/mcp")
+        XCTAssertEqual(configuration.activePetID, OpenPetsBundledPets.starcornID)
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
     }
 
@@ -338,6 +337,7 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(configuration.mcpHost, "127.0.0.1")
         XCTAssertEqual(configuration.mcpPort, 3001)
         XCTAssertEqual(configuration.mcpEndpoint, "/mcp")
+        XCTAssertEqual(configuration.activePetID, OpenPetsBundledPets.starcornID)
     }
 
     func testBundledStarcornPetLoads() throws {
@@ -345,6 +345,53 @@ final class OpenPetsTests: XCTestCase {
 
         XCTAssertEqual(bundle.manifest.id, "starcorn")
         XCTAssertEqual(bundle.manifest.displayName, "Starcorn")
+    }
+
+    func testInstallDeepLinkParsesDownloadURLAndPetID() throws {
+        let request = try OpenPetsInstallRequest.parseDeepLink(URL(string: "openpets://install?url=https%3A%2F%2Fopenpets.sh%2Fapi%2Fpets%2Fstarcorn%2Fdownload%3Fticket%3Dabc&id=starcorn")!)
+
+        XCTAssertEqual(request.downloadURL.absoluteString, "https://openpets.sh/api/pets/starcorn/download?ticket=abc")
+        XCTAssertEqual(request.requestedPetID, "starcorn")
+    }
+
+    func testPetInstallerInstallsAndActivatesValidBundle() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceBundle = root.appendingPathComponent("test-pet", isDirectory: true)
+        let archiveURL = root.appendingPathComponent("test-pet.zip")
+        let installedURL = root.appendingPathComponent("Installed", isDirectory: true)
+        let configURL = root.appendingPathComponent("config/config.json")
+        try makePetBundle(id: "test-pet", at: sourceBundle)
+        try zipDirectory(sourceBundle, to: archiveURL)
+
+        let result = try OpenPetsPetInstaller(
+            installedPetsDirectory: installedURL,
+            configurationURL: configURL
+        ).install(
+            request: OpenPetsInstallRequest(downloadURL: archiveURL, requestedPetID: "test-pet"),
+            activate: true
+        )
+
+        XCTAssertEqual(result.petID, "test-pet")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: installedURL.appendingPathComponent("test-pet/pet.json").path))
+        XCTAssertEqual(try OpenPetsConfiguration.load(from: configURL).activePetID, "test-pet")
+    }
+
+    func testPetInstallerRejectsUnsafeArchiveEntry() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent("work", isDirectory: true)
+        let archiveURL = root.appendingPathComponent("unsafe.zip")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try Data("unsafe".utf8).write(to: root.appendingPathComponent("evil.txt"))
+        _ = try runProcess("/usr/bin/zip", arguments: ["-q", archiveURL.path, "../evil.txt"], workingDirectory: work)
+
+        XCTAssertThrowsError(try OpenPetsPetInstaller(
+            installedPetsDirectory: root.appendingPathComponent("Installed", isDirectory: true),
+            configurationURL: root.appendingPathComponent("config.json")
+        ).install(request: OpenPetsInstallRequest(downloadURL: archiveURL))) { error in
+            XCTAssertEqual(error as? OpenPetsInstallError, .unsafeArchiveEntry("../evil.txt"))
+        }
     }
 
     func testPetCommandRoundTripCoding() throws {
@@ -389,7 +436,6 @@ final class OpenPetsTests: XCTestCase {
         let decoded = try JSONDecoder().decode(PetNotification.self, from: data)
         XCTAssertEqual(decoded, notification)
     }
-
 
     func testPetResponseRoundTripCodingIncludesThreadId() throws {
         let response = PetResponse(
@@ -591,6 +637,52 @@ final class OpenPetsTests: XCTestCase {
 
         CGImageDestinationAddImage(destination, image, nil)
         XCTAssertTrue(CGImageDestinationFinalize(destination))
+    }
+
+    private func makePetBundle(id: String, at directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(
+            """
+            {
+              "id": "\(id)",
+              "displayName": "Test Pet",
+              "description": "Installed test pet.",
+              "spritesheetPath": "spritesheet.png"
+            }
+            """.utf8
+        ).write(to: directory.appendingPathComponent("pet.json"))
+        try writePNG(width: 1536, height: 1872, to: directory.appendingPathComponent("spritesheet.png"))
+    }
+
+    private func zipDirectory(_ directory: URL, to archiveURL: URL) throws {
+        _ = try runProcess(
+            "/usr/bin/ditto",
+            arguments: ["-c", "-k", directory.path, archiveURL.path],
+            workingDirectory: directory.deletingLastPathComponent()
+        )
+    }
+
+    private func runProcess(_ executable: String, arguments: [String], workingDirectory: URL? = nil) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.currentDirectoryURL = workingDirectory
+        let output = Pipe()
+        let error = Pipe()
+        process.standardOutput = output
+        process.standardError = error
+        try process.run()
+        process.waitUntilExit()
+        let outputData = output.fileHandleForReading.readDataToEndOfFile()
+        let errorData = error.fileHandleForReading.readDataToEndOfFile()
+        guard process.terminationStatus == 0 else {
+            throw NSError(
+                domain: "OpenPetsTests",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: String(data: errorData, encoding: .utf8) ?? "process failed"]
+            )
+        }
+        return String(data: outputData, encoding: .utf8) ?? ""
     }
 
     private func schemaProperty(toolName: String, propertyName: String) throws -> [String: Value] {

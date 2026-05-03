@@ -3,6 +3,7 @@ import Foundation
 import Logging
 import MCP
 import OpenPetsCore
+import Sparkle
 
 @main
 struct OpenPetsMenuBarApp {
@@ -34,11 +35,31 @@ private final class OpenPetsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
     func applicationDidFinishLaunching(_ notification: Foundation.Notification) {
         controller.installMenu()
         controller.startMCPServer()
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
     }
 
     func applicationWillTerminate(_ notification: Foundation.Notification) {
+        NSAppleEventManager.shared().removeEventHandler(
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
         controller.stopPet()
         controller.stopMCPServer()
+    }
+
+    @objc private func handleGetURLEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
+        guard
+            let urlString = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+            let url = URL(string: urlString)
+        else {
+            return
+        }
+        controller.installPet(from: url)
     }
 }
 
@@ -78,6 +99,11 @@ final class OpenPetsMenuBarController: NSObject {
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let logger = Logger(label: "openpets.menubar", factory: { StreamLogHandler.standardError(label: $0) })
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
     private var configuration = OpenPetsConfiguration()
     private var petSession: OpenPetsHostSession?
     private var mcpApp: OpenPetsMCPHTTPApp?
@@ -104,9 +130,19 @@ final class OpenPetsMenuBarController: NSObject {
         action: #selector(togglePet),
         keyEquivalent: ""
     )
+    private lazy var activePetItem = NSMenuItem(
+        title: "Active Pet",
+        action: nil,
+        keyEquivalent: ""
+    )
     private lazy var openConfigItem = NSMenuItem(
         title: "Open Config Folder",
         action: #selector(openConfigFolder),
+        keyEquivalent: ""
+    )
+    private lazy var checkForUpdatesItem = NSMenuItem(
+        title: "Check for Updates...",
+        action: #selector(checkForUpdates),
         keyEquivalent: ""
     )
     private lazy var quitItem = NSMenuItem(
@@ -123,7 +159,7 @@ final class OpenPetsMenuBarController: NSObject {
         )
 
         let menu = NSMenu()
-        for item in [startStopServerItem, serverStatusItem, copyServerURLItem, wakeStopPetItem, openConfigItem, quitItem] {
+        for item in [startStopServerItem, serverStatusItem, copyServerURLItem, wakeStopPetItem, openConfigItem, checkForUpdatesItem, quitItem] {
             item.target = self
         }
         menu.addItem(startStopServerItem)
@@ -131,8 +167,10 @@ final class OpenPetsMenuBarController: NSObject {
         menu.addItem(copyServerURLItem)
         menu.addItem(.separator())
         menu.addItem(wakeStopPetItem)
+        menu.addItem(activePetItem)
         menu.addItem(.separator())
         menu.addItem(openConfigItem)
+        menu.addItem(checkForUpdatesItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
         statusItem.menu = menu
@@ -183,8 +221,62 @@ final class OpenPetsMenuBarController: NSObject {
         }
     }
 
+    @objc private func checkForUpdates() {
+        updaterController.checkForUpdates(nil)
+    }
+
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    @objc private func selectPet(_ sender: NSMenuItem) {
+        guard let petID = sender.representedObject as? String else {
+            return
+        }
+
+        do {
+            var updatedConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
+            updatedConfiguration.activePetID = petID
+            try updatedConfiguration.save()
+            configuration = updatedConfiguration
+            let shouldRestart = petSession?.isRunning == true
+            if shouldRestart {
+                stopPet()
+                try wakePet()
+            }
+            refreshMenu()
+        } catch {
+            showError("Could not switch pet", detail: error.localizedDescription)
+        }
+    }
+
+    func installPet(from url: URL) {
+        Task {
+            do {
+                let result = try await Task.detached {
+                    try OpenPetsPetInstaller().install(source: url.absoluteString)
+                }.value
+                await MainActor.run {
+                    self.configuration.activePetID = result.petID
+                    let shouldRestart = self.petSession?.isRunning == true
+                    if shouldRestart {
+                        self.stopPet()
+                        do {
+                            try self.wakePet()
+                        } catch {
+                            self.showError("Installed pet, but could not wake it", detail: error.localizedDescription)
+                            return
+                        }
+                    }
+                    self.refreshMenu()
+                    self.showInfo("Installed \(result.displayName)", detail: result.activated ? "This pet is now active." : "The pet was installed.")
+                }
+            } catch {
+                await MainActor.run {
+                    self.showError("Could not install pet", detail: error.localizedDescription)
+                }
+            }
+        }
     }
 
     func startMCPServer() {
@@ -261,8 +353,9 @@ final class OpenPetsMenuBarController: NSObject {
         }
 
         reloadConfiguration()
+        let petDirectoryURL = OpenPetsPetLibrary().activePetURL(for: configuration)
         let hostConfiguration = OpenPetsHostConfiguration(
-            petDirectoryURL: OpenPetsBundledPets.starcornURL,
+            petDirectoryURL: petDirectoryURL,
             socketPath: configuration.socketPath,
             display: configuration.display
         )
@@ -342,6 +435,21 @@ final class OpenPetsMenuBarController: NSObject {
         startStopServerItem.title = mcpState.isActive ? "Stop MCP Server" : "Start MCP Server"
         serverStatusItem.title = "Server Status: \(mcpState.label)"
         wakeStopPetItem.title = petSession?.isRunning == true ? "Stop Pet" : "Wake Pet"
+        refreshPetMenu()
+    }
+
+    private func refreshPetMenu() {
+        let menu = NSMenu()
+        let pets = OpenPetsPetLibrary().listPets()
+        for pet in pets {
+            let item = NSMenuItem(title: pet.displayName, action: #selector(selectPet(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = pet.id
+            item.state = pet.id == configuration.activePetID ? .on : .off
+            menu.addItem(item)
+        }
+        activePetItem.submenu = menu
+        activePetItem.title = "Active Pet: \(pets.first { $0.id == configuration.activePetID }?.displayName ?? "Starcorn")"
     }
 
     private func showStartupPetGreeting() {
@@ -410,6 +518,15 @@ final class OpenPetsMenuBarController: NSObject {
     private func showError(_ title: String, detail: String) {
         let alert = NSAlert()
         alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = detail
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func showInfo(_ title: String, detail: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
         alert.messageText = title
         alert.informativeText = detail
         alert.addButton(withTitle: "OK")

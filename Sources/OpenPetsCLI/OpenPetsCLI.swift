@@ -21,6 +21,20 @@ struct OpenPetsCLI {
         }
 
         switch command {
+        case "install":
+            let parsed = parseOptionsAndPositionals(Array(arguments.dropFirst()))
+            guard let source = parsed.positionals.first else {
+                throw CLIError.missingArgument("source")
+            }
+            let result = try OpenPetsPetInstaller().install(
+                source: source,
+                activate: !parsed.flags.contains("no-activate")
+            )
+            print("Installed \(result.displayName) (\(result.petID))")
+            if result.activated {
+                print("Activated \(result.petID)")
+            }
+
         case "run":
             let options = parseOptions(Array(arguments.dropFirst()))
             guard let petPath = options.values["pet"] else {
@@ -126,6 +140,7 @@ struct OpenPetsCLI {
             """
             Usage:
               openpets run --pet /Users/sam/.codex/pets/starcorn [--socket PATH] [--scale 0.42]
+              openpets install URL_OR_PET_ID [--no-activate]
               openpets notify --title TITLE --status KIND [--text TEXT] [--thread UUID] [--callback URL] [--button LABEL] [--ttl SECONDS] [--socket PATH]
               openpets animate ANIMATION [--loop|--once] [--ttl SECONDS] [--socket PATH]
               openpets clear --thread UUID [--socket PATH]
@@ -151,7 +166,7 @@ struct OpenPetsCLI {
             let argument = arguments[index]
             if argument.hasPrefix("--") {
                 let name = String(argument.dropFirst(2))
-                if ["loop", "once"].contains(name) {
+                if ["loop", "once", "no-activate"].contains(name) {
                     flags.insert(name)
                     index += 1
                     continue

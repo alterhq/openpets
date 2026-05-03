@@ -1,6 +1,8 @@
 import Foundation
 
 public enum OpenPetsBundledPets {
+    public static let starcornID = "starcorn"
+
     public static var starcornURL: URL {
         if let manifestURL = Bundle.module.url(forResource: "pet", withExtension: "json") {
             return manifestURL.deletingLastPathComponent()

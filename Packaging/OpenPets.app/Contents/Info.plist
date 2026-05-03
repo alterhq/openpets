@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>OpenPets</string>
+  <key>CFBundleIdentifier</key>
+  <string>sh.openpets.OpenPets</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>OpenPets</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>OpenPets Install Links</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>openpets</string>
+      </array>
+    </dict>
+  </array>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.developer-tools</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>SUEnableInstallerLauncherService</key>
+  <true/>
+  <key>SUFeedURL</key>
+  <string>https://openpets.sh/appcast.xml</string>
+  <key>SUPublicEDKey</key>
+  <string>REPLACE_WITH_SPARKLE_EDDSA_PUBLIC_KEY</string>
+</dict>
+</plist>
