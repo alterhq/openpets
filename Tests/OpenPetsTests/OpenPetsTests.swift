@@ -83,6 +83,41 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(PetAnimation.idle.frameDurationsMilliseconds.last ?? 0, 2_600)
     }
 
+    @MainActor
+    func testMessageLayoutKeepsSpriteAnchoredForDifferentMessageWidths() {
+        let containerWidth: CGFloat = 316
+        let spriteSize = CGSize(width: 112, height: 126)
+        let messageAreaHeight: CGFloat = 108
+        let expectedRightEdge = containerWidth - OpenPetsMessageLayout.sideInset
+        let bubbles = [
+            PetBubble(title: "Hi", detail: nil, indicator: .working),
+            PetBubble(
+                title: "Review ready",
+                detail: "Changes are ready to inspect and the message needs enough copy to occupy a wider card.",
+                indicator: .attention
+            )
+        ]
+
+        let layouts = bubbles.map {
+            OpenPetsMessageLayout.make(
+                bubble: $0,
+                isCollapsed: false,
+                containerWidth: containerWidth,
+                spriteSize: spriteSize,
+                messageAreaHeight: messageAreaHeight
+            )
+        }
+
+        XCTAssertEqual(layouts.first?.spriteFrame.minX, layouts.last?.spriteFrame.minX)
+        for layout in layouts {
+            XCTAssertEqual(layout.spriteFrame.maxX, expectedRightEdge)
+            XCTAssertEqual(layout.cardFrame.maxX, expectedRightEdge)
+            XCTAssertEqual(layout.toggleFrame.maxX, expectedRightEdge)
+            XCTAssertGreaterThanOrEqual(layout.cardFrame.minX, OpenPetsMessageLayout.sideInset)
+            XCTAssertGreaterThanOrEqual(layout.toggleFrame.minX, OpenPetsMessageLayout.sideInset)
+        }
+    }
+
     func testDefaultDisplayConfigurationUsesSmallScale() {
         XCTAssertEqual(OpenPetsDisplayConfiguration.default.scale, 0.42)
 

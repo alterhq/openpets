@@ -673,19 +673,19 @@ private final class PetHostController {
     }
 }
 
-private struct PetBubble {
+struct PetBubble {
     var title: String
     var detail: String?
     var indicator: PetBubbleIndicator
     var action: PetBubbleAction? = nil
 }
 
-private struct PetBubbleAction {
+struct PetBubbleAction {
     var label: String
     var url: URL
 }
 
-private enum PetBubbleIndicator {
+enum PetBubbleIndicator {
     case working
     case success
     case attention
@@ -912,7 +912,7 @@ private final class PetHostView: NSView {
     }
 }
 
-private struct OpenPetsMessageLayout {
+struct OpenPetsMessageLayout {
     static let toggleDiameter: CGFloat = 36
     static let verticalGap: CGFloat = 10
     static let toggleGapBelowCard: CGFloat = 4
@@ -944,7 +944,7 @@ private struct OpenPetsMessageLayout {
             maxWidth: cardMaxWidth,
             messageAreaHeight: messageAreaHeight
         )
-        let rightEdge = sideInset + cardSize.width
+        let rightEdge = containerWidth - sideInset
         let spriteFrame = CGRect(
             x: rightEdge - spriteSize.width,
             y: 0,
