@@ -23,6 +23,14 @@ Before any final response that reports a task result, answer, decision, blocker,
 
 For non-trivial or multi-step work, also call `notify` with `running` when work starts or when meaningful progress changes. Do not notify for every internal step.
 
+Threaded message workflow:
+
+1. When starting a distinct task or agent run, call `notify` without `threadId`. OpenPets creates a new bubble and returns a `threadId`.
+2. Store that `threadId` for the life of the task.
+3. For every later progress, waiting, review, failed, done, or follow-up update for that same task, call `notify` with the same `threadId` so the existing bubble is replaced.
+4. If multiple tasks or agents run concurrently, each task or agent should keep its own `threadId`; do not reuse one task's `threadId` for another task.
+5. Use `clear_pet_message` with a task's `threadId` only when that specific task bubble is no longer relevant.
+
 If the first `notify` call fails or indicates the pet is not running/visible, call `wake_pet` and retry `notify` once before sending the final response. Do not call `get_openpets_status` before normal updates.
 
 Use statuses consistently:
@@ -36,9 +44,7 @@ Use statuses consistently:
 
 Final notifications must be specific. Include the actual outcome in `text`, such as "No README file was found in `/Users/sam/code/openpets`," rather than generic text like "Done."
 
-Keep `title` short and put useful detail in `text`. Use `ttlSeconds` only for temporary updates; omit it when the message should remain visible until replaced or cleared.
-
-Use `clear_pet_message` when the current pet message is no longer relevant.
+Keep `title` short and put useful detail in `text`. Use `ttlSeconds` only for temporary updates; omit it when the message should remain visible until replaced by another notify call with the same `threadId` or cleared.
 
 Use `play_pet_animation` only for non-message visual feedback. If you need to communicate text, use `notify` instead.
 

@@ -196,7 +196,7 @@ final class OpenPetsMenuBarController: NSObject {
             port: configuration.mcpPort,
             endpoint: configuration.mcpEndpoint
         )
-        let app = OpenPetsMCPHTTPApp(configuration: config, serverFactory: { [weak self] _, _ in
+        let app = OpenPetsMCPHTTPApp(configuration: config, serverFactory: { [weak self] _ in
             guard let self else {
                 throw OpenPetsMenuBarError.controllerUnavailable
             }

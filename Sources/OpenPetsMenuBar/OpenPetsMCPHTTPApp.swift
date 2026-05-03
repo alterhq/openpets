@@ -32,13 +32,18 @@ actor OpenPetsMCPHTTPApp {
         }
     }
 
-    typealias ServerFactory = @Sendable (String, StatefulHTTPServerTransport) async throws -> Server
+    typealias ServerFactory = @Sendable (String) async throws -> Server
 
     private struct SessionContext {
         let server: Server
         let transport: StatefulHTTPServerTransport
         let createdAt: Date
         var lastAccessedAt: Date
+    }
+
+    private struct StatelessContext {
+        let server: Server
+        let transport: StatelessHTTPServerTransport
     }
 
     private struct FixedSessionIDGenerator: SessionIDGenerator {
@@ -49,8 +54,10 @@ actor OpenPetsMCPHTTPApp {
     private let configuration: Configuration
     private let serverFactory: ServerFactory
     private let validationPipeline: any HTTPRequestValidationPipeline
+    private let statelessValidationPipeline: any HTTPRequestValidationPipeline
     private var channel: Channel?
     private var sessions: [String: SessionContext] = [:]
+    private var statelessContext: StatelessContext?
     private var cleanupTask: Task<Void, Never>?
 
     nonisolated let logger: Logger
@@ -76,6 +83,12 @@ actor OpenPetsMCPHTTPApp {
             ContentTypeValidator(),
             ProtocolVersionValidator(),
             SessionValidator()
+        ])
+        statelessValidationPipeline = StandardValidationPipeline(validators: [
+            originValidator,
+            AcceptHeaderValidator(mode: .jsonOnly),
+            ContentTypeValidator(),
+            ProtocolVersionValidator()
         ])
     }
 
@@ -109,6 +122,7 @@ actor OpenPetsMCPHTTPApp {
         cleanupTask?.cancel()
         cleanupTask = nil
         await closeAllSessions()
+        await closeStatelessContext()
         try? await channel?.close()
         channel = nil
         logger.info("OpenPets MCP HTTP server stopped")
@@ -136,6 +150,13 @@ actor OpenPetsMCPHTTPApp {
             return await createSessionAndHandle(request)
         }
 
+        if request.method.uppercased() == "POST" {
+            if let sessionID {
+                logger.warning("Falling back to stateless MCP handling for unknown session", metadata: ["sessionID": "\(sessionID)"])
+            }
+            return await handleStatelessRequest(request)
+        }
+
         if sessionID != nil {
             return .error(statusCode: 404, .invalidRequest("Not Found: Session not found or expired"))
         }
@@ -152,7 +173,7 @@ actor OpenPetsMCPHTTPApp {
         )
 
         do {
-            let server = try await serverFactory(sessionID, transport)
+            let server = try await serverFactory(sessionID)
             try await server.start(transport: transport)
             sessions[sessionID] = SessionContext(
                 server: server,
@@ -182,6 +203,37 @@ actor OpenPetsMCPHTTPApp {
         for sessionID in sessions.keys {
             await closeSession(sessionID)
         }
+    }
+
+    private func handleStatelessRequest(_ request: HTTPRequest) async -> HTTPResponse {
+        do {
+            let context = try await statelessContext()
+            return await context.transport.handleRequest(request)
+        } catch {
+            return .error(statusCode: 500, .internalError("Failed to create stateless handler: \(error.localizedDescription)"))
+        }
+    }
+
+    private func statelessContext() async throws -> StatelessContext {
+        if let statelessContext {
+            return statelessContext
+        }
+
+        let transport = StatelessHTTPServerTransport(
+            validationPipeline: statelessValidationPipeline,
+            logger: logger
+        )
+        let server = try await serverFactory("stateless")
+        try await server.start(transport: transport)
+        let context = StatelessContext(server: server, transport: transport)
+        statelessContext = context
+        return context
+    }
+
+    private func closeStatelessContext() async {
+        guard let context = statelessContext else { return }
+        statelessContext = nil
+        await context.transport.disconnect()
     }
 
     private func sessionCleanupLoop() async {

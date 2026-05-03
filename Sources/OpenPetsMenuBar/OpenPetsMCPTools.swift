@@ -63,7 +63,7 @@ func openPetsTools() -> [Tool] {
         ),
         Tool(
             name: "notify",
-            description: "Show a message bubble above the OpenPets desktop pet and choose a status-driven animation. Use this to tell the user about task progress, completion, errors, review needs, or replies. This tool automatically wakes the pet if needed; if delivery fails, it returns the current OpenPets status.",
+            description: "Show or update one threaded message bubble above the OpenPets desktop pet and choose a status-driven animation. Workflow: when starting a distinct task or agent run, omit threadId so OpenPets creates a new bubble and returns a threadId. Store that returned threadId for the life of that task. On every later progress, waiting, review, failed, or done update for the same task, pass the same threadId so the existing bubble is replaced instead of creating another bubble. Different concurrent tasks or agents should each use their own threadId so their bubbles stack independently. This tool automatically wakes the pet if needed; if delivery fails, it returns the current OpenPets status.",
             inputSchema: objectSchema(
                 properties: [
                     "title": property(type: "string", description: "Short message title shown in the pet bubble."),
@@ -76,6 +76,10 @@ func openPetsTools() -> [Tool] {
                         description: "Required status that controls the pet animation and bubble indicator. Valid values: \(openPetsStatusValues.joined(separator: ", ")).",
                         enumValues: openPetsStatusValues
                     ),
+                    "threadId": property(
+                        type: "string",
+                        description: "Optional UUID for an existing notification thread. Omit only for the first notify call of a distinct task or agent run. Store the returned threadId and pass it on all later notify calls for that same task so OpenPets replaces the right bubble."
+                    ),
                     "x-url-callback": property(
                         type: "string",
                         description: "Optional URL opened when the bubble action button is clicked. Use only for an actionable destination."
@@ -86,7 +90,7 @@ func openPetsTools() -> [Tool] {
                     ),
                     "ttlSeconds": property(
                         type: "number",
-                        description: "Optional number of seconds before the message auto-clears. Omit to keep the message visible until replaced or cleared."
+                        description: "Optional number of seconds before this thread's message auto-clears. Omit to keep the message visible until another notify with the same threadId replaces it or clear_pet_message clears that threadId."
                     )
                 ],
                 required: ["title", "text", "status"]
@@ -113,8 +117,16 @@ func openPetsTools() -> [Tool] {
         ),
         Tool(
             name: "clear_pet_message",
-            description: "Clear the current OpenPets message bubble without stopping the pet.",
-            inputSchema: objectSchema()
+            description: "Clear one OpenPets message bubble by threadId without stopping the pet. Use this only when a specific task's bubble is no longer relevant; do not clear another task or agent's threadId.",
+            inputSchema: objectSchema(
+                properties: [
+                    "threadId": property(
+                        type: "string",
+                        description: "Required UUID returned by notify for the specific task bubble to clear."
+                    )
+                ],
+                required: ["threadId"]
+            )
         ),
         Tool(
             name: "ping_pet",
@@ -158,6 +170,7 @@ private func callOpenPetsTool(
                 title: title,
                 text: text,
                 status: status,
+                threadId: arguments["threadId"]?.stringValue,
                 xURLCallback: arguments["x-url-callback"]?.stringValue,
                 buttonLabel: arguments["buttonLabel"]?.stringValue,
                 ttlSeconds: number(arguments["ttlSeconds"])
@@ -176,7 +189,10 @@ private func callOpenPetsTool(
             )))
 
         case "clear_pet_message":
-            return await commandResult(controller.sendPetCommand(.clearMessage))
+            guard let threadId = arguments["threadId"]?.stringValue, !threadId.isEmpty else {
+                return failure("Missing required string argument: threadId")
+            }
+            return await commandResult(controller.sendPetCommand(.clearMessage(threadId: threadId)))
 
         case "ping_pet":
             return await commandResult(controller.sendPetCommand(.ping))
@@ -189,8 +205,19 @@ private func callOpenPetsTool(
     }
 }
 
-private func commandResult(_ response: PetResponse) -> CallTool.Result {
+func commandResult(_ response: PetResponse) -> CallTool.Result {
     if response.ok {
+        if let threadId = response.threadId, !threadId.isEmpty {
+            let text = """
+            threadId: \(threadId)
+            Use this threadId on your next notify call for this same task or chat thread so OpenPets updates the existing bubble instead of creating a new one.
+            """
+            return CallTool.Result(
+                content: [.text(text: text, annotations: nil, _meta: nil)],
+                structuredContent: Optional<Value>.some(.object(["threadId": .string(threadId)])),
+                isError: false
+            )
+        }
         return ok(response.message ?? "ok")
     }
     return failure(response.message ?? "OpenPets command failed")

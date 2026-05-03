@@ -4,6 +4,7 @@ public struct PetNotification: Codable, Equatable, Sendable {
     public var title: String
     public var text: String?
     public var status: String
+    public var threadId: String?
     public var xURLCallback: String?
     public var buttonLabel: String?
     public var ttlSeconds: Double?
@@ -12,6 +13,7 @@ public struct PetNotification: Codable, Equatable, Sendable {
         title: String,
         text: String? = nil,
         status: String,
+        threadId: String? = nil,
         xURLCallback: String? = nil,
         buttonLabel: String? = nil,
         ttlSeconds: Double? = nil
@@ -19,6 +21,7 @@ public struct PetNotification: Codable, Equatable, Sendable {
         self.title = title
         self.text = text
         self.status = status
+        self.threadId = threadId
         self.xURLCallback = xURLCallback
         self.buttonLabel = buttonLabel
         self.ttlSeconds = ttlSeconds
@@ -28,16 +31,29 @@ public struct PetNotification: Codable, Equatable, Sendable {
         case title
         case text
         case status
+        case threadId
         case xURLCallback = "x-url-callback"
         case buttonLabel
         case ttlSeconds
     }
 }
 
+public extension PetNotification {
+    func resolvingThreadId() -> PetNotification {
+        guard threadId?.isEmpty != false else {
+            return self
+        }
+
+        var notification = self
+        notification.threadId = UUID().uuidString
+        return notification
+    }
+}
+
 public enum PetCommand: Equatable, Sendable {
     case notify(PetNotification)
     case playAnimation(name: PetAnimation, loop: Bool?, ttlSeconds: Double?)
-    case clearMessage
+    case clearMessage(threadId: String)
     case ping
     case shutdown
 }
@@ -49,6 +65,7 @@ extension PetCommand: Codable {
         case ttlSeconds
         case name
         case loop
+        case threadId
     }
 
     private enum CommandType: String, Codable {
@@ -73,7 +90,7 @@ extension PetCommand: Codable {
                 ttlSeconds: try container.decodeIfPresent(Double.self, forKey: .ttlSeconds)
             )
         case .clearMessage:
-            self = .clearMessage
+            self = .clearMessage(threadId: try container.decode(String.self, forKey: .threadId))
         case .ping:
             self = .ping
         case .shutdown:
@@ -93,8 +110,9 @@ extension PetCommand: Codable {
             try container.encode(name, forKey: .name)
             try container.encodeIfPresent(loop, forKey: .loop)
             try container.encodeIfPresent(ttlSeconds, forKey: .ttlSeconds)
-        case .clearMessage:
+        case .clearMessage(let threadId):
             try container.encode(CommandType.clearMessage, forKey: .type)
+            try container.encode(threadId, forKey: .threadId)
         case .ping:
             try container.encode(CommandType.ping, forKey: .type)
         case .shutdown:
@@ -106,9 +124,11 @@ extension PetCommand: Codable {
 public struct PetResponse: Codable, Equatable, Sendable {
     public var ok: Bool
     public var message: String?
+    public var threadId: String?
 
-    public init(ok: Bool, message: String? = nil) {
+    public init(ok: Bool, message: String? = nil, threadId: String? = nil) {
         self.ok = ok
         self.message = message
+        self.threadId = threadId
     }
 }

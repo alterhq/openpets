@@ -218,6 +218,13 @@ public final class OpenPetsHostSession {
                 NSApplication.shared.terminate(nil)
             }
             return PetResponse(ok: true, message: "shutting down")
+        case .notify(let notification):
+            guard let controller else {
+                return PetResponse(ok: false, message: "pet is not running")
+            }
+            let resolvedNotification = notification.resolvingThreadId()
+            controller.apply(.notify(resolvedNotification))
+            return PetResponse(ok: true, threadId: resolvedNotification.threadId)
         default:
             guard let controller else {
                 return PetResponse(ok: false, message: "pet is not running")
@@ -270,6 +277,15 @@ private final class PetHostCommandBridge: @unchecked Sendable {
             response = PetResponse(ok: true, message: "pong")
         case .shutdown:
             response = PetResponse(ok: true, message: "shutting down")
+        case .notify(let notification):
+            let resolvedNotification = notification.resolvingThreadId()
+            response = PetResponse(ok: true, threadId: resolvedNotification.threadId)
+            DispatchQueue.main.async { [self] in
+                Task { @MainActor in
+                    session.handle(.notify(resolvedNotification))
+                }
+            }
+            return response
         default:
             response = PetResponse(ok: true)
         }
@@ -296,7 +312,7 @@ private final class PetHostController {
     private var lastGlideUpdateTime: TimeInterval?
     private var glideAnimationFallback: PetAnimation = .runningRight
     private var ttlWorkItem: DispatchWorkItem?
-    private var messageWorkItem: DispatchWorkItem?
+    private var messageWorkItems: [String: DispatchWorkItem] = [:]
     private var currentAnimation: PetAnimation = .idle
     private var currentFrameIndex = 0
     private var remainingAnimationCycles: Int?
@@ -370,8 +386,7 @@ private final class PetHostController {
         cancelLaunchGlide()
         ttlWorkItem?.cancel()
         ttlWorkItem = nil
-        messageWorkItem?.cancel()
-        messageWorkItem = nil
+        cancelMessageWorkItems()
         window.orderOut(nil)
         window.close()
     }
@@ -379,7 +394,12 @@ private final class PetHostController {
     func apply(_ command: PetCommand) {
         switch command {
         case .notify(let notification):
-            setBubble(bubble(for: notification), ttlSeconds: notification.ttlSeconds)
+            let resolvedNotification = notification.resolvingThreadId()
+            setBubble(
+                bubble(for: resolvedNotification),
+                threadId: resolvedNotification.threadId ?? UUID().uuidString,
+                ttlSeconds: resolvedNotification.ttlSeconds
+            )
             if let finiteAnimation = finiteAnimation(forStatusKind: notification.status) {
                 play(finiteAnimation, loopCount: 3, ttlSeconds: nil)
             } else {
@@ -387,8 +407,8 @@ private final class PetHostController {
             }
         case .playAnimation(let name, let loop, let ttlSeconds):
             play(name, loop: loop ?? true, ttlSeconds: ttlSeconds)
-        case .clearMessage:
-            setBubble(nil, ttlSeconds: nil)
+        case .clearMessage(let threadId):
+            clearBubble(threadId: threadId)
         case .ping, .shutdown:
             break
         }
@@ -398,18 +418,31 @@ private final class PetHostController {
         try? positionStore.savePosition(window.frame.origin, forPetID: petBundle.manifest.id)
     }
 
-    private func setBubble(_ bubble: PetBubble?, ttlSeconds: Double?) {
-        messageWorkItem?.cancel()
-        petView.bubble = bubble
+    private func setBubble(_ bubble: PetBubble, threadId: String, ttlSeconds: Double?) {
+        messageWorkItems[threadId]?.cancel()
+        petView.setBubble(bubble, threadId: threadId)
 
-        guard let ttlSeconds, ttlSeconds > 0, bubble != nil else { return }
+        guard let ttlSeconds, ttlSeconds > 0 else { return }
         let workItem = DispatchWorkItem { [weak self] in
             Task { @MainActor in
-                self?.petView.bubble = nil
+                self?.clearBubble(threadId: threadId)
             }
         }
-        messageWorkItem = workItem
+        messageWorkItems[threadId] = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + ttlSeconds, execute: workItem)
+    }
+
+    private func clearBubble(threadId: String) {
+        messageWorkItems[threadId]?.cancel()
+        messageWorkItems[threadId] = nil
+        petView.clearBubble(threadId: threadId)
+    }
+
+    private func cancelMessageWorkItems() {
+        for workItem in messageWorkItems.values {
+            workItem.cancel()
+        }
+        messageWorkItems.removeAll()
     }
 
     private func play(_ animation: PetAnimation, loop: Bool, ttlSeconds: Double?) {
@@ -666,14 +699,57 @@ private final class PetHostController {
     }
 }
 
-struct PetBubble {
+struct PetMessage: Equatable, Identifiable {
+    var id: String { threadId }
+    var threadId: String
+    var bubble: PetBubble
+}
+
+struct PetMessageStack: Equatable {
+    static let visibleLimit = 4
+
+    private var orderedThreadIds: [String] = []
+    private var bubblesByThreadId: [String: PetBubble] = [:]
+
+    var activeMessages: [PetMessage] {
+        orderedThreadIds.compactMap { threadId in
+            bubblesByThreadId[threadId].map { PetMessage(threadId: threadId, bubble: $0) }
+        }
+    }
+
+    var activeCount: Int {
+        activeMessages.count
+    }
+
+    mutating func setBubble(_ bubble: PetBubble, threadId: String) {
+        if bubblesByThreadId[threadId] == nil {
+            orderedThreadIds.append(threadId)
+        }
+        bubblesByThreadId[threadId] = bubble
+    }
+
+    mutating func clearBubble(threadId: String) {
+        bubblesByThreadId[threadId] = nil
+        orderedThreadIds.removeAll { $0 == threadId }
+    }
+
+    func visibleMessages(limit: Int = visibleLimit) -> [PetMessage] {
+        Array(activeMessages.suffix(max(0, limit)))
+    }
+
+    func hiddenMessageCount(limit: Int = visibleLimit) -> Int {
+        max(0, activeCount - max(0, limit))
+    }
+}
+
+struct PetBubble: Equatable {
     var title: String
     var detail: String?
     var indicator: PetBubbleIndicator
     var action: PetBubbleAction? = nil
 }
 
-struct PetBubbleAction {
+struct PetBubbleAction: Equatable {
     var label: String
     var url: URL
 }
@@ -724,45 +800,21 @@ private final class PetHostView: NSView {
         spriteView.spriteFrame
     }
 
-    var bubble: PetBubble? {
-        didSet {
-            if bubble == nil {
-                isMessageCollapsed = false
-                activeMessageCount = 0
-            } else if oldValue == nil || !isMessageCollapsed {
-                activeMessageCount = 1
-            } else {
-                activeMessageCount += 1
-            }
-            if let bubble, !bounds.isEmpty {
-                let size = resizeWindowToPreferredSize(for: bubble)
-                currentMessageLayout = messageLayout(for: bubble, containerSize: size)
-            } else if bubble == nil {
-                _ = resizeWindowToPreferredSize(for: nil)
-            }
-            updateMessageView()
-            needsLayout = true
-        }
-    }
-
     private let spriteView: PetSpriteView
     private lazy var bubbleView: MessageHostingView = {
         let view = MessageHostingView(rootView: OpenPetsMessageView(
-            bubble: nil,
-            isCollapsed: false,
-            activeMessageCount: 0,
+            messages: [],
+            hiddenMessageCount: 0,
             layout: .empty,
-            onToggle: {}
+            cardFrames: []
         ))
         return view
     }()
     private let spriteSize: CGSize
     private let messageAreaHeight: CGFloat
     private let compactSize: CGSize
-    private var isMessageCollapsed = false
-    private var activeMessageCount = 0
+    private var messageStack = PetMessageStack()
     private var currentMessageLayout = OpenPetsMessageLayout.empty
-    private var mouseDownInsideToggle = false
 
     init(
         frame: CGRect,
@@ -792,73 +844,82 @@ private final class PetHostView: NSView {
         false
     }
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        if containsToggleHit(point) {
-            return self
-        }
-        return super.hitTest(point)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        mouseDownInsideToggle = containsToggleHit(convert(event.locationInWindow, from: nil))
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        defer { mouseDownInsideToggle = false }
-
-        if mouseDownInsideToggle, containsToggleHit(point) {
-            toggleMessageCollapsed()
-            return
-        }
-
-        super.mouseUp(with: event)
-    }
-
     override func layout() {
         super.layout()
-        guard let bubble else {
+        let visibleMessages = messageStack.visibleMessages()
+        guard !visibleMessages.isEmpty else {
             spriteView.frame = bounds
             spriteView.spriteFrame = defaultSpriteFrame(in: bounds)
             bubbleView.frame = .zero
-            bubbleView.toggleRect = .zero
-            bubbleView.actionRect = .zero
+            bubbleView.actionRects = []
             currentMessageLayout = .empty
             return
         }
-        currentMessageLayout = messageLayout(for: bubble, containerSize: bounds.size)
+        currentMessageLayout = messageLayout(for: visibleMessages, containerSize: bounds.size)
         spriteView.frame = bounds
         spriteView.spriteFrame = currentMessageLayout.spriteFrame
         bubbleView.frame = bounds
-        bubbleView.toggleRect = currentMessageLayout.toggleFrame
-        bubbleView.actionRect = bubble.action == nil ? .zero : currentMessageLayout.cardFrame
-        updateMessageView(layout: currentMessageLayout)
+        bubbleView.actionRects = zip(visibleMessages, currentMessageLayout.cardFrames).compactMap { message, frame in
+            message.bubble.action == nil ? nil : frame
+        }
+        updateMessageView(
+            messages: visibleMessages,
+            hiddenMessageCount: messageStack.hiddenMessageCount(),
+            layout: currentMessageLayout
+        )
     }
 
     func set(animation: PetAnimation, frameIndex: Int) {
         spriteView.set(animation: animation, frameIndex: frameIndex)
     }
 
-    private func messageLayout(for bubble: PetBubble, containerSize: CGSize) -> OpenPetsMessageLayout {
+    func setBubble(_ bubble: PetBubble, threadId: String) {
+        messageStack.setBubble(bubble, threadId: threadId)
+        relayoutMessages()
+    }
+
+    func clearBubble(threadId: String) {
+        messageStack.clearBubble(threadId: threadId)
+        relayoutMessages()
+    }
+
+    private func relayoutMessages() {
+        let visibleMessages = messageStack.visibleMessages()
+        if !visibleMessages.isEmpty, !bounds.isEmpty {
+            let size = resizeWindowToPreferredSize(for: visibleMessages)
+            currentMessageLayout = messageLayout(for: visibleMessages, containerSize: size)
+        } else {
+            _ = resizeWindowToPreferredSize(for: [])
+            currentMessageLayout = .empty
+        }
+        updateMessageView(
+            messages: visibleMessages,
+            hiddenMessageCount: messageStack.hiddenMessageCount(),
+            layout: currentMessageLayout
+        )
+        needsLayout = true
+    }
+
+    private func messageLayout(for messages: [PetMessage], containerSize: CGSize) -> OpenPetsMessageLayout {
         OpenPetsMessageLayout.make(
-            bubble: bubble,
-            isCollapsed: isMessageCollapsed,
+            messages: messages,
+            hiddenMessageCount: messageStack.hiddenMessageCount(),
             containerWidth: containerSize.width,
             spriteSize: spriteSize,
             messageAreaHeight: messageAreaHeight
         )
     }
 
-    private func preferredSize(for bubble: PetBubble?) -> CGSize {
-        guard let bubble else {
+    private func preferredSize(for messages: [PetMessage]) -> CGSize {
+        guard !messages.isEmpty else {
             return compactSize
         }
-        return messageLayout(for: bubble, containerSize: compactSize).containerSize
+        return messageLayout(for: messages, containerSize: compactSize).containerSize
     }
 
     @discardableResult
-    private func resizeWindowToPreferredSize(for bubble: PetBubble?) -> CGSize {
-        let size = preferredSize(for: bubble)
+    private func resizeWindowToPreferredSize(for messages: [PetMessage]) -> CGSize {
+        let size = preferredSize(for: messages)
         guard abs(size.width - bounds.width) > 0.5 || abs(size.height - bounds.height) > 0.5 else {
             return size
         }
@@ -882,60 +943,47 @@ private final class PetHostView: NSView {
         )
     }
 
-    private func containsToggleHit(_ point: NSPoint) -> Bool {
-        guard bubble != nil else { return false }
-        let normalizedPoint = isFlipped
-            ? CGPoint(x: point.x, y: bounds.height - point.y)
-            : point
-        return currentMessageLayout.toggleFrame.contains(normalizedPoint)
-    }
-
-    private func toggleMessageCollapsed() {
-        guard bubble != nil else { return }
-        isMessageCollapsed.toggle()
-        if !isMessageCollapsed {
-            activeMessageCount = 1
-        }
-        if let bubble, !bounds.isEmpty {
-            let size = resizeWindowToPreferredSize(for: bubble)
-            currentMessageLayout = messageLayout(for: bubble, containerSize: size)
-        }
-        updateMessageView(layout: currentMessageLayout)
-        needsLayout = true
-    }
-
-    private func updateMessageView(layout: OpenPetsMessageLayout? = nil) {
+    private func updateMessageView(
+        messages: [PetMessage] = [],
+        hiddenMessageCount: Int = 0,
+        layout: OpenPetsMessageLayout? = nil
+    ) {
         let layout = layout ?? currentMessageLayout
         bubbleView.rootView = OpenPetsMessageView(
-            bubble: bubble,
-            isCollapsed: isMessageCollapsed,
-            activeMessageCount: activeMessageCount,
+            messages: messages,
+            hiddenMessageCount: hiddenMessageCount,
             layout: layout,
-            onToggle: { [weak self] in
-                self?.toggleMessageCollapsed()
-            }
+            cardFrames: layout.cardFrames
         )
-        bubbleView.isHidden = bubble == nil
+        bubbleView.isHidden = messages.isEmpty
     }
 }
 
 struct OpenPetsMessageLayout {
-    static let toggleDiameter: CGFloat = 36
     static let verticalGap: CGFloat = 10
-    static let toggleGapBelowCard: CGFloat = 4
+    static let stackGap: CGFloat = 6
     static let sideInset: CGFloat = 12
     static let maxCardWidth: CGFloat = 260
+    static let overflowSize = CGSize(width: 44, height: 24)
     static let empty = OpenPetsMessageLayout(
         containerSize: .zero,
-        cardFrame: .zero,
+        cardFrames: [],
         spriteFrame: .zero,
-        toggleFrame: .zero
+        overflowFrame: .zero
     )
 
     var containerSize: CGSize
-    var cardFrame: CGRect
+    var cardFrames: [CGRect]
     var spriteFrame: CGRect
-    var toggleFrame: CGRect
+    var overflowFrame: CGRect
+
+    var cardFrame: CGRect {
+        cardFrames.first ?? .zero
+    }
+
+    var toggleFrame: CGRect {
+        overflowFrame
+    }
 
     @MainActor
     static func make(
@@ -945,12 +993,25 @@ struct OpenPetsMessageLayout {
         spriteSize: CGSize,
         messageAreaHeight: CGFloat
     ) -> OpenPetsMessageLayout {
-        let cardMaxWidth = min(maxCardWidth, max(1, containerWidth - sideInset * 2))
-        let cardSize = OpenPetsBubbleContentView.size(
-            for: bubble,
-            maxWidth: cardMaxWidth,
+        _ = isCollapsed
+        return make(
+            messages: [PetMessage(threadId: "preview", bubble: bubble)],
+            hiddenMessageCount: 0,
+            containerWidth: containerWidth,
+            spriteSize: spriteSize,
             messageAreaHeight: messageAreaHeight
         )
+    }
+
+    @MainActor
+    static func make(
+        messages: [PetMessage],
+        hiddenMessageCount: Int,
+        containerWidth: CGFloat,
+        spriteSize: CGSize,
+        messageAreaHeight: CGFloat
+    ) -> OpenPetsMessageLayout {
+        let cardMaxWidth = min(maxCardWidth, max(1, containerWidth - sideInset * 2))
         let rightEdge = containerWidth - sideInset
         let spriteFrame = CGRect(
             x: rightEdge - spriteSize.width,
@@ -958,34 +1019,55 @@ struct OpenPetsMessageLayout {
             width: spriteSize.width,
             height: spriteSize.height
         )
-        let cardFrame = CGRect(
-            x: rightEdge - cardSize.width,
-            y: spriteFrame.maxY + verticalGap,
-            width: cardSize.width,
-            height: cardSize.height
-        )
-        let toggleFrame = CGRect(
-            x: rightEdge - toggleDiameter,
-            y: cardFrame.minY - toggleDiameter - toggleGapBelowCard,
-            width: toggleDiameter,
-            height: toggleDiameter
-        )
-        let contentHeight = isCollapsed
-            ? max(spriteSize.height + toggleDiameter / 2, spriteSize.height)
-            : spriteSize.height + cardSize.height + verticalGap
+        var cardFrames: [CGRect] = []
+        var nextY = spriteFrame.maxY + verticalGap
+
+        for message in messages {
+            let cardSize = OpenPetsBubbleContentView.size(
+                for: message.bubble,
+                maxWidth: cardMaxWidth,
+                messageAreaHeight: messageAreaHeight
+            )
+            cardFrames.append(CGRect(
+                x: rightEdge - cardSize.width,
+                y: nextY,
+                width: cardSize.width,
+                height: cardSize.height
+            ))
+            nextY += cardSize.height + stackGap
+        }
+
+        let overflowFrame: CGRect
+        if hiddenMessageCount > 0 {
+            overflowFrame = CGRect(
+                x: rightEdge - overflowSize.width,
+                y: nextY,
+                width: overflowSize.width,
+                height: overflowSize.height
+            )
+            nextY += overflowSize.height
+        } else {
+            overflowFrame = .zero
+            if !cardFrames.isEmpty {
+                nextY -= stackGap
+            }
+        }
+
+        let contentHeight = messages.isEmpty
+            ? spriteSize.height
+            : max(spriteSize.height, nextY)
 
         return OpenPetsMessageLayout(
             containerSize: CGSize(width: containerWidth, height: contentHeight),
-            cardFrame: cardFrame,
+            cardFrames: cardFrames,
             spriteFrame: spriteFrame,
-            toggleFrame: toggleFrame
+            overflowFrame: overflowFrame
         )
     }
 }
 
 private final class MessageHostingView: NSHostingView<OpenPetsMessageView> {
-    var toggleRect = CGRect.zero
-    var actionRect = CGRect.zero
+    var actionRects: [CGRect] = []
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard containsInteractiveContent(point) else { return nil }
@@ -996,28 +1078,29 @@ private final class MessageHostingView: NSHostingView<OpenPetsMessageView> {
         let normalizedPoint = isFlipped
             ? CGPoint(x: point.x, y: bounds.height - point.y)
             : point
-        return toggleRect.contains(normalizedPoint) || actionRect.contains(normalizedPoint)
+        return actionRects.contains { $0.contains(normalizedPoint) }
     }
 }
 
 private struct OpenPetsMessageView: View {
-    let bubble: PetBubble?
-    let isCollapsed: Bool
-    let activeMessageCount: Int
+    let messages: [PetMessage]
+    let hiddenMessageCount: Int
     let layout: OpenPetsMessageLayout
-    let onToggle: () -> Void
+    let cardFrames: [CGRect]
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Group {
-            if let bubble {
+            if !messages.isEmpty {
                 ZStack(alignment: .topLeading) {
-                    if !isCollapsed {
-                        OpenPetsBubbleContentView(bubble: bubble)
-                            .position(swiftUIPosition(for: layout.cardFrame))
+                    ForEach(Array(zip(messages, cardFrames)), id: \.0.threadId) { message, frame in
+                        OpenPetsBubbleContentView(bubble: message.bubble)
+                            .position(swiftUIPosition(for: frame))
                     }
-                    toggleButton
-                        .position(swiftUIPosition(for: layout.toggleFrame))
+                    if hiddenMessageCount > 0 {
+                        overflowPill
+                            .position(swiftUIPosition(for: layout.overflowFrame))
+                    }
                 }
                 .frame(
                     width: layout.containerSize.width,
@@ -1037,32 +1120,20 @@ private struct OpenPetsMessageView: View {
         )
     }
 
-    private var toggleButton: some View {
-        Button(action: onToggle) {
-            ZStack {
-                Circle()
-                    .fill(Color(nsColor: .controlBackgroundColor).opacity(colorScheme == .dark ? 0.96 : 0.98))
-                Circle()
+    private var overflowPill: some View {
+        Text("+\(min(hiddenMessageCount, 99))")
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .frame(width: OpenPetsMessageLayout.overflowSize.width, height: OpenPetsMessageLayout.overflowSize.height)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(colorScheme == .dark ? 0.96 : 0.98))
+            .clipShape(Capsule())
+            .overlay {
+                Capsule()
                     .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.6 : 0.35), lineWidth: 1)
-
-                if isCollapsed {
-                    Text("\(min(max(activeMessageCount, 1), 99))")
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(.primary)
-                } else {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
             }
-            .frame(width: OpenPetsMessageLayout.toggleDiameter, height: OpenPetsMessageLayout.toggleDiameter)
-            .contentShape(Circle())
-            .shadow(color: .black.opacity(colorScheme == .dark ? 0.24 : 0.08), radius: 3, x: 0, y: 1)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(isCollapsed ? "Show messages" : "Hide messages")
-        .accessibilityValue(isCollapsed ? "\(activeMessageCount) active" : "")
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0.20 : 0.07), radius: 3, x: 0, y: 1)
+            .accessibilityLabel("\(hiddenMessageCount) hidden messages")
     }
 }
 
@@ -1489,11 +1560,10 @@ private struct OpenPetsMessagingPreviewGallery: View {
                         y: layout.containerSize.height - layout.spriteFrame.midY
                     )
                 OpenPetsMessageView(
-                    bubble: bubble,
-                    isCollapsed: isCollapsed,
-                    activeMessageCount: activeMessageCount,
+                    messages: [PetMessage(threadId: "preview", bubble: bubble)],
+                    hiddenMessageCount: isCollapsed ? activeMessageCount : 0,
                     layout: layout,
-                    onToggle: {}
+                    cardFrames: layout.cardFrames
                 )
             }
             .frame(width: layout.containerSize.width, height: layout.containerSize.height)

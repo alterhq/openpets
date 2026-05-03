@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import Logging
 import MCP
 @testable import OpenPetsCore
 @testable import OpenPetsMenuBar
@@ -114,10 +115,33 @@ final class OpenPetsTests: XCTestCase {
         for layout in layouts {
             XCTAssertEqual(layout.spriteFrame.maxX, expectedRightEdge)
             XCTAssertEqual(layout.cardFrame.maxX, expectedRightEdge)
-            XCTAssertEqual(layout.toggleFrame.maxX, expectedRightEdge)
             XCTAssertGreaterThanOrEqual(layout.cardFrame.minX, OpenPetsMessageLayout.sideInset)
-            XCTAssertGreaterThanOrEqual(layout.toggleFrame.minX, OpenPetsMessageLayout.sideInset)
         }
+    }
+
+
+    @MainActor
+    func testStackedMessageLayoutShowsFourBubblesAndOverflowCount() {
+        let messages = (1...5).map { index in
+            PetMessage(
+                threadId: "thread-\(index)",
+                bubble: PetBubble(title: "Message \(index)", detail: nil, indicator: .none)
+            )
+        }
+
+        let layout = OpenPetsMessageLayout.make(
+            messages: Array(messages.suffix(4)),
+            hiddenMessageCount: 1,
+            containerWidth: 316,
+            spriteSize: CGSize(width: 112, height: 126),
+            messageAreaHeight: 108
+        )
+
+        XCTAssertEqual(layout.cardFrames.count, 4)
+        XCTAssertEqual(layout.cardFrames.map(\.maxX), Array(repeating: 304, count: 4))
+        XCTAssertGreaterThan(layout.overflowFrame.height, 0)
+        XCTAssertEqual(layout.overflowFrame.maxX, 304)
+        XCTAssertGreaterThan(layout.containerSize.height, layout.spriteFrame.height)
     }
 
     func testMCPToolDescriptionsGuideAgentUsage() throws {
@@ -129,11 +153,81 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(descriptions["wake_pet"]).contains("when the pet is not running"))
         XCTAssertTrue(try XCTUnwrap(descriptions["stop_pet"]).contains("hide, quit, stop, or dismiss"))
         XCTAssertTrue(try XCTUnwrap(descriptions["notify"]).contains("status-driven animation"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["notify"]).contains("Workflow"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["notify"]).contains("threadId"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["notify"]).contains("Different concurrent tasks or agents"))
         XCTAssertTrue(try XCTUnwrap(descriptions["notify"]).contains("automatically wakes the pet"))
         XCTAssertTrue(try XCTUnwrap(descriptions["notify"]).contains("returns the current OpenPets status"))
         XCTAssertTrue(try XCTUnwrap(descriptions["play_pet_animation"]).contains("Use notify instead"))
-        XCTAssertTrue(try XCTUnwrap(descriptions["clear_pet_message"]).contains("without stopping the pet"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["clear_pet_message"]).contains("by threadId"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["clear_pet_message"]).contains("do not clear another task"))
         XCTAssertTrue(try XCTUnwrap(descriptions["ping_pet"]).contains("connectivity check"))
+    }
+
+
+    func testMCPNotifyAndClearThreadSchemas() throws {
+        let threadSchema = try schemaProperty(toolName: "notify", propertyName: "threadId")
+        let threadDescription = try XCTUnwrap(threadSchema["description"]?.stringValue)
+        XCTAssertEqual(threadSchema["type"]?.stringValue, "string")
+        XCTAssertTrue(threadDescription.contains("first notify call"))
+        XCTAssertTrue(threadDescription.contains("replaces the right bubble"))
+
+        let clearThreadSchema = try schemaProperty(toolName: "clear_pet_message", propertyName: "threadId")
+        XCTAssertEqual(clearThreadSchema["type"]?.stringValue, "string")
+        XCTAssertEqual(try schemaRequired(toolName: "clear_pet_message"), ["threadId"])
+    }
+
+    func testMCPNotifyResultReturnsThreadStructuredContent() throws {
+        let threadId = "11111111-1111-4111-8111-111111111111"
+        let result = commandResult(PetResponse(ok: true, threadId: threadId))
+
+        XCTAssertFalse(result.isError ?? false)
+        let text: String
+        if case let .text(value, _, _) = try XCTUnwrap(result.content.first) {
+            text = value
+        } else {
+            XCTFail("Expected text tool content")
+            return
+        }
+        XCTAssertTrue(text.contains("threadId: \(threadId)"))
+        XCTAssertTrue(text.contains("Use this threadId on your next notify call"))
+        XCTAssertTrue(text.contains("updates the existing bubble"))
+        XCTAssertEqual(result.structuredContent?.objectValue?["threadId"]?.stringValue, threadId)
+    }
+
+    func testMCPHTTPPostWithExpiredSessionFallsBackToStatelessHandling() async throws {
+        let app = OpenPetsMCPHTTPApp(
+            configuration: .init(host: "127.0.0.1", port: 3001, endpoint: "/mcp"),
+            serverFactory: { _ in
+                let server = Server(
+                    name: "openpets-test",
+                    version: "1.0.0",
+                    capabilities: .init(tools: .init(listChanged: true))
+                )
+                await server.withMethodHandler(ListTools.self) { _ in
+                    .init(tools: [])
+                }
+                return server
+            },
+            logger: Logger(label: "openpets.tests")
+        )
+        let request = HTTPRequest(
+            method: "POST",
+            headers: [
+                HTTPHeaderName.accept: "application/json, text/event-stream",
+                HTTPHeaderName.contentType: "application/json",
+                HTTPHeaderName.sessionID: "expired-session"
+            ],
+            body: Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#.utf8),
+            path: "/mcp"
+        )
+
+        let response = await app.handleHTTPRequest(request)
+
+        XCTAssertEqual(response.statusCode, 200)
+        let bodyData = try XCTUnwrap(response.bodyData)
+        let body = try XCTUnwrap(String(data: bodyData, encoding: .utf8))
+        XCTAssertTrue(body.contains(#""tools":[]"#))
     }
 
     func testMCPNotifyStatusSchemaListsValidStatuses() throws {
@@ -255,12 +349,13 @@ final class OpenPetsTests: XCTestCase {
                 title: "Review ready",
                 text: "Changes are ready to inspect.",
                 status: "review",
+                threadId: "11111111-1111-4111-8111-111111111111",
                 xURLCallback: "openpets://review?id=123",
                 buttonLabel: "Review",
                 ttlSeconds: 30
             )),
             .playAnimation(name: .waving, loop: false, ttlSeconds: 1),
-            .clearMessage,
+            .clearMessage(threadId: "11111111-1111-4111-8111-111111111111"),
             .ping,
             .shutdown
         ]
@@ -289,6 +384,47 @@ final class OpenPetsTests: XCTestCase {
 
         let decoded = try JSONDecoder().decode(PetNotification.self, from: data)
         XCTAssertEqual(decoded, notification)
+    }
+
+
+    func testPetResponseRoundTripCodingIncludesThreadId() throws {
+        let response = PetResponse(
+            ok: true,
+            message: "created",
+            threadId: "11111111-1111-4111-8111-111111111111"
+        )
+
+        let data = try JSONEncoder().encode(response)
+        let decoded = try JSONDecoder().decode(PetResponse.self, from: data)
+
+        XCTAssertEqual(decoded, response)
+    }
+
+    func testPetMessageStackUpdatesClearsAndCapsVisibleMessages() {
+        var stack = PetMessageStack()
+
+        stack.setBubble(PetBubble(title: "One", detail: nil, indicator: .working), threadId: "one")
+        stack.setBubble(PetBubble(title: "Two", detail: nil, indicator: .success), threadId: "two")
+        stack.setBubble(PetBubble(title: "One updated", detail: "Still running", indicator: .working), threadId: "one")
+
+        XCTAssertEqual(stack.activeMessages.map(\.threadId), ["one", "two"])
+        XCTAssertEqual(stack.activeMessages.first?.bubble.title, "One updated")
+        XCTAssertEqual(stack.activeMessages.last?.bubble.title, "Two")
+
+        stack.clearBubble(threadId: "two")
+
+        XCTAssertEqual(stack.activeMessages.map(\.threadId), ["one"])
+
+        for index in 2...6 {
+            stack.setBubble(
+                PetBubble(title: "Message \(index)", detail: nil, indicator: .none),
+                threadId: "thread-\(index)"
+            )
+        }
+
+        XCTAssertEqual(stack.activeCount, 6)
+        XCTAssertEqual(stack.visibleMessages().map(\.threadId), ["thread-3", "thread-4", "thread-5", "thread-6"])
+        XCTAssertEqual(stack.hiddenMessageCount(), 2)
     }
 
     func testUnixSocketClientServerFraming() throws {
@@ -458,5 +594,11 @@ final class OpenPetsTests: XCTestCase {
         let inputSchema = try XCTUnwrap(tool.inputSchema.objectValue)
         let properties = try XCTUnwrap(inputSchema["properties"]?.objectValue)
         return try XCTUnwrap(properties[propertyName]?.objectValue)
+    }
+
+    private func schemaRequired(toolName: String) throws -> [String] {
+        let tool = try XCTUnwrap(openPetsTools().first { $0.name == toolName })
+        let inputSchema = try XCTUnwrap(tool.inputSchema.objectValue)
+        return inputSchema["required"]?.arrayValue?.compactMap(\.stringValue) ?? []
     }
 }

@@ -76,6 +76,12 @@ Send a notification to a running pet:
 swift run openpets notify --title "Build Passed" --status done --text "All tests completed."
 ```
 
+The command prints a `threadId`. Pass it back with `--thread` to replace that task's bubble instead of creating a new one:
+
+```sh
+swift run openpets notify --thread THREAD_ID --title "Build Passed" --status done --text "All tests completed."
+```
+
 Play an animation:
 
 ```sh
@@ -88,10 +94,10 @@ Check connectivity:
 swift run openpets ping
 ```
 
-Clear the message bubble or stop the pet:
+Clear one message bubble or stop the pet:
 
 ```sh
-swift run openpets clear
+swift run openpets clear --thread THREAD_ID
 swift run openpets stop
 ```
 
@@ -106,9 +112,9 @@ OpenPets exposes these MCP tools from the menu bar app:
 | `get_openpets_status` | Read MCP server, pet, socket, and config status. |
 | `wake_pet` | Start or bring back the desktop pet. |
 | `stop_pet` | Stop the desktop pet. |
-| `notify` | Show a message bubble with a status-driven animation. |
+| `notify` | Show or update a threaded message bubble with a status-driven animation. |
 | `play_pet_animation` | Play an animation without showing text. |
-| `clear_pet_message` | Clear the current message bubble. |
+| `clear_pet_message` | Clear one message bubble by `threadId`. |
 | `ping_pet` | Confirm the pet process can receive commands. |
 
 Valid notification statuses are `running`, `review`, `done`, `failed`, `waiting`, and `message`.

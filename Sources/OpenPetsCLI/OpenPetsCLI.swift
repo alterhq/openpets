@@ -54,6 +54,7 @@ struct OpenPetsCLI {
                     title: title,
                     text: text.isEmpty ? nil : text,
                     status: status,
+                    threadId: parsed.values["thread"],
                     xURLCallback: parsed.values["callback"] ?? parsed.values["x-url-callback"],
                     buttonLabel: parsed.values["button"],
                     ttlSeconds: parsed.values["ttl"].flatMap(Double.init)
@@ -83,7 +84,10 @@ struct OpenPetsCLI {
         case "clear":
             let userConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
             let options = parseOptions(Array(arguments.dropFirst()))
-            try send(.clearMessage, socketPath: options.values["socket"] ?? userConfiguration.socketPath)
+            guard let threadId = options.values["thread"], !threadId.isEmpty else {
+                throw CLIError.missingRequiredOption("--thread")
+            }
+            try send(.clearMessage(threadId: threadId), socketPath: options.values["socket"] ?? userConfiguration.socketPath)
 
         case "ping":
             let userConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
@@ -107,6 +111,8 @@ struct OpenPetsCLI {
         let response = try OpenPetsClient(socketPath: socketPath ?? OpenPetsPaths.defaultSocketPath).send(command)
         if let message = response.message, !message.isEmpty {
             print(message)
+        } else if let threadId = response.threadId, !threadId.isEmpty {
+            print(threadId)
         } else if !response.ok {
             print("failed")
         }
@@ -120,9 +126,9 @@ struct OpenPetsCLI {
             """
             Usage:
               openpets run --pet /Users/sam/.codex/pets/starcorn [--socket PATH] [--scale 0.42]
-              openpets notify --title TITLE --status KIND [--text TEXT] [--callback URL] [--button LABEL] [--ttl SECONDS] [--socket PATH]
+              openpets notify --title TITLE --status KIND [--text TEXT] [--thread UUID] [--callback URL] [--button LABEL] [--ttl SECONDS] [--socket PATH]
               openpets animate ANIMATION [--loop|--once] [--ttl SECONDS] [--socket PATH]
-              openpets clear [--socket PATH]
+              openpets clear --thread UUID [--socket PATH]
               openpets ping [--socket PATH]
               openpets stop [--socket PATH]
 
