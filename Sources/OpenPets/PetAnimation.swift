@@ -7,6 +7,8 @@ public enum PetAnimation: String, Codable, CaseIterable, Sendable {
     case waving
     case jumping
     case failed
+    case waiting
+    case running
     case review
 
     public var row: Int {
@@ -17,6 +19,8 @@ public enum PetAnimation: String, Codable, CaseIterable, Sendable {
         case .waving: 3
         case .jumping: 4
         case .failed: 5
+        case .waiting: 6
+        case .running: 7
         case .review: 8
         }
     }
@@ -33,6 +37,8 @@ public enum PetAnimation: String, Codable, CaseIterable, Sendable {
         case .waving: [140, 140, 140, 280]
         case .jumping: [140, 140, 140, 140, 280]
         case .failed: [140, 140, 140, 140, 140, 140, 140, 240]
+        case .waiting: [150, 150, 150, 150, 150, 280]
+        case .running: [150, 150, 150, 150, 150, 280]
         case .review: [150, 150, 150, 150, 150, 280]
         }
     }

@@ -136,7 +136,7 @@ struct OpenPetsCLI {
               openpets ping [--socket PATH]
               openpets stop [--socket PATH]
 
-            Animations: idle, running-right, running-left, waving, jumping, failed, review
+            Animations: idle, running-right, running-left, waving, jumping, failed, waiting, running, review
             """
         )
     }

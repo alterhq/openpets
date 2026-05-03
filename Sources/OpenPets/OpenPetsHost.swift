@@ -136,7 +136,7 @@ private final class PetHostController {
     private var messageWorkItem: DispatchWorkItem?
     private var currentAnimation: PetAnimation = .idle
     private var currentFrameIndex = 0
-    private var loopCurrentAnimation = true
+    private var remainingAnimationCycles: Int?
 
     init(petBundle: PetBundle, display: OpenPetsDisplayConfiguration, positionStore: PetPositionStore) throws {
         self.petBundle = petBundle
@@ -201,7 +201,11 @@ private final class PetHostController {
             setMessage(text, ttlSeconds: ttlSeconds)
         case .setStatus(let kind, let message, let ttlSeconds):
             setBubble(bubble(forStatusKind: kind, message: message), ttlSeconds: ttlSeconds)
-            play(animation(forStatusKind: kind), loop: true, ttlSeconds: ttlSeconds)
+            if let finiteAnimation = finiteAnimation(forStatusKind: kind) {
+                play(finiteAnimation, loopCount: 3, ttlSeconds: nil)
+            } else {
+                play(animation(forStatusKind: kind), loop: true, ttlSeconds: ttlSeconds)
+            }
         case .playAnimation(let name, let loop, let ttlSeconds):
             play(name, loop: loop ?? true, ttlSeconds: ttlSeconds)
         case .clearMessage:
@@ -234,10 +238,14 @@ private final class PetHostController {
     }
 
     private func play(_ animation: PetAnimation, loop: Bool, ttlSeconds: Double?) {
+        play(animation, loopCount: loop ? nil : 1, ttlSeconds: ttlSeconds)
+    }
+
+    private func play(_ animation: PetAnimation, loopCount: Int?, ttlSeconds: Double?) {
         ttlWorkItem?.cancel()
         currentAnimation = animation
         currentFrameIndex = entryFrame(for: animation)
-        loopCurrentAnimation = loop
+        remainingAnimationCycles = loopCount
         petView.set(animation: animation, frameIndex: currentFrameIndex)
         scheduleNextFrame()
 
@@ -255,7 +263,7 @@ private final class PetHostController {
         ttlWorkItem?.cancel()
         let previousAnimation = currentAnimation
         currentAnimation = animation
-        loopCurrentAnimation = true
+        remainingAnimationCycles = nil
         if previousAnimation == .runningRight || previousAnimation == .runningLeft {
             currentFrameIndex %= animation.frameCount
         } else {
@@ -271,7 +279,7 @@ private final class PetHostController {
             1
         case .waving, .jumping, .failed:
             min(1, animation.frameCount - 1)
-        case .idle, .review:
+        case .idle, .waiting, .running, .review:
             0
         }
     }
@@ -292,11 +300,17 @@ private final class PetHostController {
         currentFrameIndex += 1
 
         if currentFrameIndex >= frameCount {
-            if loopCurrentAnimation {
-                currentFrameIndex = 0
+            if let remainingAnimationCycles {
+                let remainingCycles = remainingAnimationCycles - 1
+                if remainingCycles > 0 {
+                    self.remainingAnimationCycles = remainingCycles
+                    currentFrameIndex = 0
+                } else {
+                    play(.idle, loop: true, ttlSeconds: nil)
+                    return
+                }
             } else {
-                play(.idle, loop: true, ttlSeconds: nil)
-                return
+                currentFrameIndex = 0
             }
         }
 
@@ -308,14 +322,31 @@ private final class PetHostController {
         switch kind.lowercased() {
         case "failed", "failure", "error":
             .failed
-        case "review", "reviewing", "running", "task", "working":
+        case "review", "reviewing":
             .review
-        case "done", "success", "completed", "complete":
+        case "waiting", "queued", "pending":
+            .waiting
+        case "running", "task", "working":
+            .running
+        case "done", "success", "completed", "complete", "committed":
             .jumping
         case "attention", "reply", "message":
             .waving
         default:
             .idle
+        }
+    }
+
+    private func finiteAnimation(forStatusKind kind: String) -> PetAnimation? {
+        switch kind.lowercased() {
+        case "done", "success", "completed", "complete", "committed":
+            .jumping
+        case "review", "reviewing":
+            .review
+        case "running", "task", "working":
+            .running
+        default:
+            nil
         }
     }
 

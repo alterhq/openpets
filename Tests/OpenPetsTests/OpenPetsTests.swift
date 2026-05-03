@@ -60,6 +60,8 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(PetAnimation.waving.row, 3)
         XCTAssertEqual(PetAnimation.jumping.row, 4)
         XCTAssertEqual(PetAnimation.failed.row, 5)
+        XCTAssertEqual(PetAnimation.waiting.row, 6)
+        XCTAssertEqual(PetAnimation.running.row, 7)
         XCTAssertEqual(PetAnimation.review.row, 8)
 
         XCTAssertEqual(PetAnimation.idle.frameCount, 6)
@@ -68,6 +70,8 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(PetAnimation.waving.frameCount, 4)
         XCTAssertEqual(PetAnimation.jumping.frameCount, 5)
         XCTAssertEqual(PetAnimation.failed.frameCount, 8)
+        XCTAssertEqual(PetAnimation.waiting.frameCount, 6)
+        XCTAssertEqual(PetAnimation.running.frameCount, 6)
         XCTAssertEqual(PetAnimation.review.frameCount, 6)
     }
 
