@@ -211,6 +211,95 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertNil(reloaded.loadPosition(forPetID: "other"))
     }
 
+    func testPetLaunchMotionRequiresStrongRelease() {
+        XCTAssertTrue(PetLaunchMotion.shouldLaunch(velocity: CGVector(dx: 650, dy: 0)))
+        XCTAssertTrue(PetLaunchMotion.shouldLaunch(velocity: CGVector(dx: 500, dy: 500)))
+        XCTAssertFalse(PetLaunchMotion.shouldLaunch(velocity: CGVector(dx: 300, dy: 200)))
+    }
+
+    func testPetLaunchMotionSelectsDirectionFromHorizontalVelocity() {
+        XCTAssertEqual(
+            PetLaunchMotion.animation(for: CGVector(dx: 20, dy: 900), fallback: .runningLeft),
+            .runningRight
+        )
+        XCTAssertEqual(
+            PetLaunchMotion.animation(for: CGVector(dx: -20, dy: 900), fallback: .runningRight),
+            .runningLeft
+        )
+        XCTAssertEqual(
+            PetLaunchMotion.animation(for: CGVector(dx: 0, dy: 900), fallback: .runningLeft),
+            .runningLeft
+        )
+    }
+
+    func testPetLaunchMotionDecaysVelocityAndKeepsMoving() {
+        let step = PetLaunchMotion.step(
+            origin: CGPoint(x: 100, y: 100),
+            velocity: CGVector(dx: 900, dy: 300),
+            movingFrame: CGRect(x: 0, y: 0, width: 80, height: 80),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1_000, height: 800),
+            fallbackAnimation: .runningRight,
+            deltaTime: PetLaunchMotion.frameInterval
+        )
+
+        XCTAssertGreaterThan(step.origin.x, 100)
+        XCTAssertGreaterThan(step.origin.y, 100)
+        XCTAssertLessThan(hypot(step.velocity.dx, step.velocity.dy), hypot(900, 300))
+        XCTAssertFalse(step.shouldStop)
+    }
+
+    func testPetLaunchMotionStopsBelowThreshold() {
+        let step = PetLaunchMotion.step(
+            origin: CGPoint(x: 100, y: 100),
+            velocity: CGVector(dx: 20, dy: 10),
+            movingFrame: CGRect(x: 0, y: 0, width: 80, height: 80),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1_000, height: 800),
+            fallbackAnimation: .runningRight,
+            deltaTime: PetLaunchMotion.frameInterval
+        )
+
+        XCTAssertTrue(step.shouldStop)
+    }
+
+    func testPetLaunchMotionClampsAtVisibleFrameEdge() {
+        let step = PetLaunchMotion.step(
+            origin: CGPoint(x: 395, y: 100),
+            velocity: CGVector(dx: 900, dy: 0),
+            movingFrame: CGRect(x: 0, y: 0, width: 100, height: 80),
+            visibleFrame: CGRect(x: 0, y: 0, width: 500, height: 500),
+            fallbackAnimation: .runningRight,
+            deltaTime: PetLaunchMotion.frameInterval
+        )
+
+        XCTAssertEqual(step.origin.x, 400)
+        XCTAssertEqual(step.velocity.dx, 0)
+        XCTAssertTrue(step.shouldStop)
+    }
+
+    func testPetLaunchMotionClampsVisibleSpriteNotWholePanel() {
+        let leftStep = PetLaunchMotion.step(
+            origin: CGPoint(x: -170, y: 100),
+            velocity: CGVector(dx: -900, dy: 0),
+            movingFrame: CGRect(x: 180, y: 100, width: 80, height: 80),
+            visibleFrame: CGRect(x: 0, y: 0, width: 500, height: 500),
+            fallbackAnimation: .runningLeft,
+            deltaTime: PetLaunchMotion.frameInterval
+        )
+        let topStep = PetLaunchMotion.step(
+            origin: CGPoint(x: 100, y: 345),
+            velocity: CGVector(dx: 0, dy: 900),
+            movingFrame: CGRect(x: 180, y: 0, width: 80, height: 150),
+            visibleFrame: CGRect(x: 0, y: 0, width: 500, height: 500),
+            fallbackAnimation: .runningRight,
+            deltaTime: PetLaunchMotion.frameInterval
+        )
+
+        XCTAssertEqual(leftStep.origin.x, -180)
+        XCTAssertEqual(leftStep.velocity.dx, 0)
+        XCTAssertEqual(topStep.origin.y, 350)
+        XCTAssertEqual(topStep.velocity.dy, 0)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("openpets-tests-\(UUID().uuidString)", isDirectory: true)

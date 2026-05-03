@@ -42,6 +42,97 @@ public struct OpenPetsHostConfiguration: Sendable {
     }
 }
 
+struct PetLaunchMotion {
+    struct Step {
+        var origin: CGPoint
+        var velocity: CGVector
+        var animation: PetAnimation
+        var shouldStop: Bool
+    }
+
+    static let launchSpeedThreshold: CGFloat = 650
+    static let stopSpeedThreshold: CGFloat = 45
+    static let minimumHorizontalAnimationSpeed: CGFloat = 15
+    static let frameInterval: TimeInterval = 1.0 / 60.0
+    private static let decelerationRate: CGFloat = 3.8
+
+    static func shouldLaunch(velocity: CGVector) -> Bool {
+        speed(of: velocity) >= launchSpeedThreshold
+    }
+
+    static func animation(for velocity: CGVector, fallback: PetAnimation) -> PetAnimation {
+        if velocity.dx > minimumHorizontalAnimationSpeed {
+            return .runningRight
+        }
+        if velocity.dx < -minimumHorizontalAnimationSpeed {
+            return .runningLeft
+        }
+        return fallback == .runningLeft ? .runningLeft : .runningRight
+    }
+
+    static func step(
+        origin: CGPoint,
+        velocity: CGVector,
+        movingFrame: CGRect,
+        visibleFrame: CGRect,
+        fallbackAnimation: PetAnimation,
+        deltaTime: TimeInterval
+    ) -> Step {
+        var nextOrigin = CGPoint(
+            x: origin.x + velocity.dx * deltaTime,
+            y: origin.y + velocity.dy * deltaTime
+        )
+        var nextVelocity = velocity
+        let minimumOrigin = CGPoint(
+            x: visibleFrame.minX - movingFrame.minX,
+            y: visibleFrame.minY - movingFrame.minY
+        )
+        let maximumOrigin = CGPoint(
+            x: visibleFrame.maxX - movingFrame.maxX,
+            y: visibleFrame.maxY - movingFrame.maxY
+        )
+
+        if nextOrigin.x < minimumOrigin.x {
+            nextOrigin.x = minimumOrigin.x
+            if nextVelocity.dx < 0 {
+                nextVelocity.dx = 0
+            }
+        } else if nextOrigin.x > maximumOrigin.x {
+            nextOrigin.x = maximumOrigin.x
+            if nextVelocity.dx > 0 {
+                nextVelocity.dx = 0
+            }
+        }
+
+        if nextOrigin.y < minimumOrigin.y {
+            nextOrigin.y = minimumOrigin.y
+            if nextVelocity.dy < 0 {
+                nextVelocity.dy = 0
+            }
+        } else if nextOrigin.y > maximumOrigin.y {
+            nextOrigin.y = maximumOrigin.y
+            if nextVelocity.dy > 0 {
+                nextVelocity.dy = 0
+            }
+        }
+
+        let decay = exp(-decelerationRate * deltaTime)
+        nextVelocity.dx *= decay
+        nextVelocity.dy *= decay
+
+        return Step(
+            origin: nextOrigin,
+            velocity: nextVelocity,
+            animation: animation(for: nextVelocity, fallback: fallbackAnimation),
+            shouldStop: speed(of: nextVelocity) < stopSpeedThreshold
+        )
+    }
+
+    private static func speed(of velocity: CGVector) -> CGFloat {
+        hypot(velocity.dx, velocity.dy)
+    }
+}
+
 public enum OpenPetsHost {
     @MainActor
     public static func run(configuration: OpenPetsHostConfiguration) throws {
@@ -200,6 +291,10 @@ private final class PetHostController {
     private let petView: PetHostView
     private let messageAreaHeight: CGFloat
     private var animationTimer: Timer?
+    private var glideTimer: Timer?
+    private var glideVelocity = CGVector.zero
+    private var lastGlideUpdateTime: TimeInterval?
+    private var glideAnimationFallback: PetAnimation = .runningRight
     private var ttlWorkItem: DispatchWorkItem?
     private var messageWorkItem: DispatchWorkItem?
     private var currentAnimation: PetAnimation = .idle
@@ -252,12 +347,14 @@ private final class PetHostController {
         petView.onClick = { [weak self] in
             self?.play(.waving, loop: false, ttlSeconds: nil)
         }
+        petView.onDragStart = { [weak self] in
+            self?.cancelLaunchGlide()
+        }
         petView.onDragDirectionChange = { [weak self] direction in
             self?.switchDragDirection(to: direction)
         }
-        petView.onDragEnd = { [weak self] in
-            self?.savePosition()
-            self?.play(.idle, loop: true, ttlSeconds: nil)
+        petView.onDragEnd = { [weak self] velocity, fallbackAnimation in
+            self?.handleDragEnd(releaseVelocity: velocity, fallbackAnimation: fallbackAnimation)
         }
 
         play(.idle, loop: true, ttlSeconds: nil)
@@ -270,6 +367,7 @@ private final class PetHostController {
     func close() {
         animationTimer?.invalidate()
         animationTimer = nil
+        cancelLaunchGlide()
         ttlWorkItem?.cancel()
         ttlWorkItem = nil
         messageWorkItem?.cancel()
@@ -325,6 +423,7 @@ private final class PetHostController {
     }
 
     private func play(_ animation: PetAnimation, loopCount: Int?, ttlSeconds: Double?) {
+        cancelLaunchGlide()
         ttlWorkItem?.cancel()
         currentAnimation = animation
         currentFrameIndex = entryFrame(for: animation)
@@ -340,6 +439,84 @@ private final class PetHostController {
         }
         ttlWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + ttlSeconds, execute: workItem)
+    }
+
+    private func handleDragEnd(releaseVelocity: CGVector, fallbackAnimation: PetAnimation?) {
+        let fallbackAnimation = directionalAnimation(from: fallbackAnimation)
+        guard PetLaunchMotion.shouldLaunch(velocity: releaseVelocity) else {
+            savePosition()
+            play(.idle, loop: true, ttlSeconds: nil)
+            return
+        }
+
+        glideVelocity = releaseVelocity
+        glideAnimationFallback = PetLaunchMotion.animation(for: releaseVelocity, fallback: fallbackAnimation)
+        switchDragDirection(to: glideAnimationFallback)
+        lastGlideUpdateTime = ProcessInfo.processInfo.systemUptime
+        glideTimer?.invalidate()
+        glideTimer = Timer.scheduledTimer(
+            withTimeInterval: PetLaunchMotion.frameInterval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.advanceLaunchGlide()
+            }
+        }
+    }
+
+    private func advanceLaunchGlide() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let previousTime = lastGlideUpdateTime ?? now
+        lastGlideUpdateTime = now
+        let deltaTime = min(max(now - previousTime, 1.0 / 120.0), 1.0 / 30.0)
+        let step = PetLaunchMotion.step(
+            origin: window.frame.origin,
+            velocity: glideVelocity,
+            movingFrame: petView.visibleSpriteFrame,
+            visibleFrame: visibleFrameForGlide(),
+            fallbackAnimation: glideAnimationFallback,
+            deltaTime: deltaTime
+        )
+
+        window.setFrameOrigin(step.origin)
+        glideVelocity = step.velocity
+        if step.animation != glideAnimationFallback {
+            glideAnimationFallback = step.animation
+            switchDragDirection(to: step.animation)
+        }
+
+        if step.shouldStop {
+            finishLaunchGlide()
+        }
+    }
+
+    private func finishLaunchGlide() {
+        cancelLaunchGlide()
+        savePosition()
+        play(.idle, loop: true, ttlSeconds: nil)
+    }
+
+    private func cancelLaunchGlide() {
+        glideTimer?.invalidate()
+        glideTimer = nil
+        lastGlideUpdateTime = nil
+    }
+
+    private func visibleFrameForGlide() -> CGRect {
+        if let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first {
+            return screen.visibleFrame
+        }
+        return window.frame
+    }
+
+    private func directionalAnimation(from animation: PetAnimation?) -> PetAnimation {
+        if let animation {
+            return animation == .runningLeft ? .runningLeft : .runningRight
+        }
+        if currentAnimation == .runningLeft {
+            return .runningLeft
+        }
+        return .runningRight
     }
 
     private func switchDragDirection(to animation: PetAnimation) {
@@ -531,9 +708,18 @@ private final class PetHostView: NSView {
         set { spriteView.onDragDirectionChange = newValue }
     }
 
-    var onDragEnd: (() -> Void)? {
+    var onDragStart: (() -> Void)? {
+        get { spriteView.onDragStart }
+        set { spriteView.onDragStart = newValue }
+    }
+
+    var onDragEnd: ((CGVector, PetAnimation?) -> Void)? {
         get { spriteView.onDragEnd }
         set { spriteView.onDragEnd = newValue }
+    }
+
+    var visibleSpriteFrame: CGRect {
+        spriteView.spriteFrame
     }
 
     var bubble: PetBubble? {
@@ -992,8 +1178,9 @@ private struct WorkingProgressRing: View {
 @MainActor
 private final class PetSpriteView: NSView {
     var onClick: (() -> Void)?
+    var onDragStart: (() -> Void)?
     var onDragDirectionChange: ((PetAnimation) -> Void)?
-    var onDragEnd: (() -> Void)?
+    var onDragEnd: ((CGVector, PetAnimation?) -> Void)?
     var spriteFrame: CGRect {
         didSet {
             needsDisplay = true
@@ -1008,6 +1195,15 @@ private final class PetSpriteView: NSView {
     private var mouseDownWindowOrigin = CGPoint.zero
     private var dragging = false
     private var lastDragAnimation: PetAnimation?
+    private var dragSamples: [DragSample] = []
+
+    private struct DragSample {
+        var location: CGPoint
+        var timestamp: TimeInterval
+    }
+
+    private static let dragVelocitySampleWindow: TimeInterval = 0.12
+    private static let maximumDragVelocitySamples = 8
 
     init(
         frame: CGRect,
@@ -1052,16 +1248,19 @@ private final class PetSpriteView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        onDragStart?()
         mouseDownScreenLocation = NSEvent.mouseLocation
         previousDragScreenLocation = mouseDownScreenLocation
         mouseDownWindowOrigin = window?.frame.origin ?? .zero
         dragging = false
         lastDragAnimation = nil
+        dragSamples = [DragSample(location: mouseDownScreenLocation, timestamp: event.timestamp)]
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let window else { return }
         let currentLocation = NSEvent.mouseLocation
+        appendDragSample(location: currentLocation, timestamp: event.timestamp)
         let delta = CGPoint(
             x: currentLocation.x - mouseDownScreenLocation.x,
             y: currentLocation.y - mouseDownScreenLocation.y
@@ -1089,10 +1288,40 @@ private final class PetSpriteView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         if dragging {
-            onDragEnd?()
+            appendDragSample(location: NSEvent.mouseLocation, timestamp: event.timestamp)
+            onDragEnd?(releaseVelocity(), lastDragAnimation)
         } else {
             onClick?()
         }
+        dragSamples.removeAll(keepingCapacity: true)
+    }
+
+    private func appendDragSample(location: CGPoint, timestamp: TimeInterval) {
+        dragSamples.append(DragSample(location: location, timestamp: timestamp))
+        let minimumTimestamp = timestamp - PetSpriteView.dragVelocitySampleWindow
+        dragSamples.removeAll { sample in
+            sample.timestamp < minimumTimestamp
+        }
+
+        if dragSamples.count > PetSpriteView.maximumDragVelocitySamples {
+            dragSamples.removeFirst(dragSamples.count - PetSpriteView.maximumDragVelocitySamples)
+        }
+    }
+
+    private func releaseVelocity() -> CGVector {
+        guard
+            let first = dragSamples.first,
+            let last = dragSamples.last,
+            last.timestamp > first.timestamp
+        else {
+            return .zero
+        }
+
+        let elapsed = last.timestamp - first.timestamp
+        return CGVector(
+            dx: (last.location.x - first.location.x) / elapsed,
+            dy: (last.location.y - first.location.y) / elapsed
+        )
     }
 
 }
