@@ -1,20 +1,41 @@
 import Foundation
 
-public struct PetStatus: Codable, Equatable, Sendable {
-    public var kind: String
-    public var message: String?
+public struct PetNotification: Codable, Equatable, Sendable {
+    public var title: String
+    public var text: String?
+    public var status: String
+    public var xURLCallback: String?
+    public var buttonLabel: String?
     public var ttlSeconds: Double?
 
-    public init(kind: String, message: String? = nil, ttlSeconds: Double? = nil) {
-        self.kind = kind
-        self.message = message
+    public init(
+        title: String,
+        text: String? = nil,
+        status: String,
+        xURLCallback: String? = nil,
+        buttonLabel: String? = nil,
+        ttlSeconds: Double? = nil
+    ) {
+        self.title = title
+        self.text = text
+        self.status = status
+        self.xURLCallback = xURLCallback
+        self.buttonLabel = buttonLabel
         self.ttlSeconds = ttlSeconds
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case title
+        case text
+        case status
+        case xURLCallback = "x-url-callback"
+        case buttonLabel
+        case ttlSeconds
     }
 }
 
 public enum PetCommand: Equatable, Sendable {
-    case setMessage(text: String, ttlSeconds: Double?, priority: Int?)
-    case setStatus(kind: String, message: String?, ttlSeconds: Double?)
+    case notify(PetNotification)
     case playAnimation(name: PetAnimation, loop: Bool?, ttlSeconds: Double?)
     case clearMessage
     case ping
@@ -24,18 +45,14 @@ public enum PetCommand: Equatable, Sendable {
 extension PetCommand: Codable {
     private enum CodingKeys: String, CodingKey {
         case type
-        case text
+        case notification
         case ttlSeconds
-        case priority
-        case kind
-        case message
         case name
         case loop
     }
 
     private enum CommandType: String, Codable {
-        case setMessage
-        case setStatus
+        case notify
         case playAnimation
         case clearMessage
         case ping
@@ -47,18 +64,8 @@ extension PetCommand: Codable {
         let type = try container.decode(CommandType.self, forKey: .type)
 
         switch type {
-        case .setMessage:
-            self = .setMessage(
-                text: try container.decode(String.self, forKey: .text),
-                ttlSeconds: try container.decodeIfPresent(Double.self, forKey: .ttlSeconds),
-                priority: try container.decodeIfPresent(Int.self, forKey: .priority)
-            )
-        case .setStatus:
-            self = .setStatus(
-                kind: try container.decode(String.self, forKey: .kind),
-                message: try container.decodeIfPresent(String.self, forKey: .message),
-                ttlSeconds: try container.decodeIfPresent(Double.self, forKey: .ttlSeconds)
-            )
+        case .notify:
+            self = .notify(try container.decode(PetNotification.self, forKey: .notification))
         case .playAnimation:
             self = .playAnimation(
                 name: try container.decode(PetAnimation.self, forKey: .name),
@@ -78,16 +85,9 @@ extension PetCommand: Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
 
         switch self {
-        case .setMessage(let text, let ttlSeconds, let priority):
-            try container.encode(CommandType.setMessage, forKey: .type)
-            try container.encode(text, forKey: .text)
-            try container.encodeIfPresent(ttlSeconds, forKey: .ttlSeconds)
-            try container.encodeIfPresent(priority, forKey: .priority)
-        case .setStatus(let kind, let message, let ttlSeconds):
-            try container.encode(CommandType.setStatus, forKey: .type)
-            try container.encode(kind, forKey: .kind)
-            try container.encodeIfPresent(message, forKey: .message)
-            try container.encodeIfPresent(ttlSeconds, forKey: .ttlSeconds)
+        case .notify(let notification):
+            try container.encode(CommandType.notify, forKey: .type)
+            try container.encode(notification, forKey: .notification)
         case .playAnimation(let name, let loop, let ttlSeconds):
             try container.encode(CommandType.playAnimation, forKey: .type)
             try container.encode(name, forKey: .name)

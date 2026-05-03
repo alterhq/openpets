@@ -211,6 +211,7 @@ final class OpenPetsMenuBarController: NSObject {
             do {
                 await MainActor.run {
                     self.mcpState = .running
+                    self.showStartupPetGreeting()
                     self.refreshMenu()
                 }
                 try await app.start()
@@ -287,6 +288,11 @@ final class OpenPetsMenuBarController: NSObject {
         return "pet is stopped"
     }
 
+    func notifyForMCP(_ notification: PetNotification) throws -> PetResponse {
+        try wakePet()
+        return sendPetCommand(.notify(notification))
+    }
+
     func sendPetCommand(_ command: PetCommand) -> PetResponse {
         guard let petSession, petSession.isRunning else {
             return PetResponse(ok: false, message: "pet is not running")
@@ -314,6 +320,21 @@ final class OpenPetsMenuBarController: NSObject {
         startStopServerItem.title = mcpState.isActive ? "Stop MCP Server" : "Start MCP Server"
         serverStatusItem.title = "Server Status: \(mcpState.label)"
         wakeStopPetItem.title = petSession?.isRunning == true ? "Stop Pet" : "Wake Pet"
+    }
+
+    private func showStartupPetGreeting() {
+        do {
+            let response = try notifyForMCP(PetNotification(
+                title: "Hey there!",
+                status: "message",
+                ttlSeconds: 4
+            ))
+            if !response.ok {
+                logger.warning("Could not show startup pet greeting", metadata: ["message": "\(response.message ?? "unknown")"])
+            }
+        } catch {
+            logger.warning("Could not wake pet for startup greeting", metadata: ["error": "\(error.localizedDescription)"])
+        }
     }
 
     private func statusText() -> String {

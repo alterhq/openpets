@@ -39,34 +39,25 @@ struct OpenPetsCLI {
             )
             try OpenPetsHost.run(configuration: configuration)
 
-        case "send":
+        case "notify":
             let userConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
             let parsed = parseOptionsAndPositionals(Array(arguments.dropFirst()))
-            let message = parsed.positionals.joined(separator: " ")
-            guard !message.isEmpty else {
-                throw CLIError.missingArgument("message")
+            guard let title = parsed.values["title"], !title.isEmpty else {
+                throw CLIError.missingRequiredOption("--title")
             }
-            try send(
-                .setMessage(
-                    text: message,
-                    ttlSeconds: parsed.values["ttl"].flatMap(Double.init),
-                    priority: parsed.values["priority"].flatMap(Int.init)
-                ),
-                socketPath: parsed.values["socket"] ?? userConfiguration.socketPath
-            )
-
-        case "status":
-            let userConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
-            let parsed = parseOptionsAndPositionals(Array(arguments.dropFirst()))
-            guard let kind = parsed.positionals.first else {
-                throw CLIError.missingArgument("status kind")
+            guard let status = parsed.values["status"], !status.isEmpty else {
+                throw CLIError.missingRequiredOption("--status")
             }
+            let text = parsed.values["text"] ?? parsed.positionals.joined(separator: " ")
             try send(
-                .setStatus(
-                    kind: kind,
-                    message: parsed.values["message"],
+                .notify(PetNotification(
+                    title: title,
+                    text: text.isEmpty ? nil : text,
+                    status: status,
+                    xURLCallback: parsed.values["callback"] ?? parsed.values["x-url-callback"],
+                    buttonLabel: parsed.values["button"],
                     ttlSeconds: parsed.values["ttl"].flatMap(Double.init)
-                ),
+                )),
                 socketPath: parsed.values["socket"] ?? userConfiguration.socketPath
             )
 
@@ -129,8 +120,7 @@ struct OpenPetsCLI {
             """
             Usage:
               openpets run --pet /Users/sam/.codex/pets/starcorn [--socket PATH] [--scale 0.42]
-              openpets send "message text" [--ttl SECONDS] [--priority N] [--socket PATH]
-              openpets status KIND [--message TEXT] [--ttl SECONDS] [--socket PATH]
+              openpets notify --title TITLE --status KIND [--text TEXT] [--callback URL] [--button LABEL] [--ttl SECONDS] [--socket PATH]
               openpets animate ANIMATION [--loop|--once] [--ttl SECONDS] [--socket PATH]
               openpets clear [--socket PATH]
               openpets ping [--socket PATH]

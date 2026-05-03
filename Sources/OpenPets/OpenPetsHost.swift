@@ -308,7 +308,7 @@ private final class PetHostController {
     init(petBundle: PetBundle, display: OpenPetsDisplayConfiguration, positionStore: PetPositionStore) throws {
         self.petBundle = petBundle
         self.positionStore = positionStore
-        messageAreaHeight = max(display.messageAreaHeight, 84)
+        messageAreaHeight = max(display.messageAreaHeight, 108)
 
         let frames = try PetHostController.loadFrames(from: petBundle)
         let spriteSize = CGSize(
@@ -378,14 +378,12 @@ private final class PetHostController {
 
     func apply(_ command: PetCommand) {
         switch command {
-        case .setMessage(let text, let ttlSeconds, _):
-            setMessage(text, ttlSeconds: ttlSeconds)
-        case .setStatus(let kind, let message, let ttlSeconds):
-            setBubble(bubble(forStatusKind: kind, message: message), ttlSeconds: ttlSeconds)
-            if let finiteAnimation = finiteAnimation(forStatusKind: kind) {
+        case .notify(let notification):
+            setBubble(bubble(for: notification), ttlSeconds: notification.ttlSeconds)
+            if let finiteAnimation = finiteAnimation(forStatusKind: notification.status) {
                 play(finiteAnimation, loopCount: 3, ttlSeconds: nil)
             } else {
-                play(animation(forStatusKind: kind), loop: true, ttlSeconds: ttlSeconds)
+                play(animation(forStatusKind: notification.status), loop: true, ttlSeconds: notification.ttlSeconds)
             }
         case .playAnimation(let name, let loop, let ttlSeconds):
             play(name, loop: loop ?? true, ttlSeconds: ttlSeconds)
@@ -398,10 +396,6 @@ private final class PetHostController {
 
     func savePosition() {
         try? positionStore.savePosition(window.frame.origin, forPetID: petBundle.manifest.id)
-    }
-
-    private func setMessage(_ text: String?, ttlSeconds: Double?) {
-        setBubble(bubble(forMessage: text), ttlSeconds: ttlSeconds)
     }
 
     private func setBubble(_ bubble: PetBubble?, ttlSeconds: Double?) {
@@ -610,45 +604,39 @@ private final class PetHostController {
         }
     }
 
-    private func bubble(forMessage text: String?) -> PetBubble? {
-        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    private func bubble(for notification: PetNotification) -> PetBubble {
+        PetBubble(
+            title: notification.title,
+            detail: notification.text,
+            indicator: indicator(forStatusKind: notification.status),
+            action: action(for: notification)
+        )
+    }
+
+    private func indicator(forStatusKind kind: String) -> PetBubbleIndicator {
+        switch kind.lowercased() {
+        case "done", "success", "completed", "complete", "committed":
+            .success
+        case "failed", "failure", "error":
+            .attention
+        default:
+            .working
+        }
+    }
+
+    private func action(for notification: PetNotification) -> PetBubbleAction? {
+        guard
+            let callback = notification.xURLCallback,
+            let url = URL(string: callback)
+        else {
             return nil
         }
 
-        let lines = text
-            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-        if lines.count > 1, !lines[1].isEmpty {
-            return PetBubble(title: lines[0], detail: lines[1], indicator: .working)
-        }
-
-        return PetBubble(title: petBundle.manifest.displayName, detail: text, indicator: .working)
-    }
-
-    private func bubble(forStatusKind kind: String, message: String?) -> PetBubble {
-        let normalized = kind.lowercased()
-        let title: String
-        let indicator: PetBubbleIndicator
-
-        switch normalized {
-        case "done", "success", "completed", "complete", "committed":
-            title = "Complete"
-            indicator = .success
-        case "failed", "failure", "error":
-            title = "Needs attention"
-            indicator = .working
-        case "review", "reviewing":
-            title = "Reviewing"
-            indicator = .working
-        case "running", "task", "working":
-            title = "Working"
-            indicator = .working
-        default:
-            title = kind.isEmpty ? petBundle.manifest.displayName : kind.capitalized
-            indicator = .working
-        }
-
-        return PetBubble(title: title, detail: message, indicator: indicator)
+        let label = notification.buttonLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return PetBubbleAction(
+            label: label?.isEmpty == false ? label! : "Open",
+            url: url
+        )
     }
 
     private static func defaultWindowOrigin(contentSize: CGSize) -> CGPoint {
@@ -689,11 +677,18 @@ private struct PetBubble {
     var title: String
     var detail: String?
     var indicator: PetBubbleIndicator
+    var action: PetBubbleAction? = nil
+}
+
+private struct PetBubbleAction {
+    var label: String
+    var url: URL
 }
 
 private enum PetBubbleIndicator {
     case working
     case success
+    case attention
 }
 
 @MainActor
@@ -819,7 +814,8 @@ private final class PetHostView: NSView {
             spriteView.frame = bounds
             spriteView.spriteFrame = defaultSpriteFrame(in: bounds)
             bubbleView.frame = .zero
-            bubbleView.interactiveRect = .zero
+            bubbleView.toggleRect = .zero
+            bubbleView.actionRect = .zero
             currentMessageLayout = .empty
             return
         }
@@ -827,7 +823,8 @@ private final class PetHostView: NSView {
         spriteView.frame = bounds
         spriteView.spriteFrame = currentMessageLayout.spriteFrame
         bubbleView.frame = bounds
-        bubbleView.interactiveRect = currentMessageLayout.toggleFrame
+        bubbleView.toggleRect = currentMessageLayout.toggleFrame
+        bubbleView.actionRect = bubble.action == nil ? .zero : currentMessageLayout.cardFrame
         updateMessageView(layout: currentMessageLayout)
     }
 
@@ -980,18 +977,19 @@ private struct OpenPetsMessageLayout {
 }
 
 private final class MessageHostingView: NSHostingView<OpenPetsMessageView> {
-    var interactiveRect = CGRect.zero
+    var toggleRect = CGRect.zero
+    var actionRect = CGRect.zero
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard containsToggle(point) else { return nil }
+        guard containsInteractiveContent(point) else { return nil }
         return super.hitTest(point)
     }
 
-    private func containsToggle(_ point: NSPoint) -> Bool {
+    private func containsInteractiveContent(_ point: NSPoint) -> Bool {
         let normalizedPoint = isFlipped
             ? CGPoint(x: point.x, y: bounds.height - point.y)
             : point
-        return interactiveRect.contains(normalizedPoint)
+        return toggleRect.contains(normalizedPoint) || actionRect.contains(normalizedPoint)
     }
 }
 
@@ -1066,27 +1064,45 @@ private struct OpenPetsBubbleContentView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(bubble.title)
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                if let detail = bubble.detail, !detail.isEmpty {
-                    Text(detail)
-                        .font(.system(size: 12.5, weight: .regular))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
+        VStack(alignment: .leading, spacing: bubble.action == nil ? 1 : 5) {
+            if let action = bubble.action {
+                Button {
+                    NSWorkspace.shared.open(action.url)
+                } label: {
+                    Text(action.label)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
                         .truncationMode(.tail)
-                        .fixedSize(horizontal: false, vertical: false)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.mini)
+                .fixedSize(horizontal: true, vertical: true)
             }
 
-            Spacer(minLength: 4)
-            indicator(for: bubble.indicator)
-                .frame(width: 16, height: 16)
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(bubble.title)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    if let detail = bubble.detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 12.5, weight: .regular))
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                            .fixedSize(horizontal: false, vertical: false)
+                    }
+                }
+
+                Spacer(minLength: 4)
+                indicator(for: bubble.indicator)
+                    .frame(width: 16, height: 16)
+            }
         }
         .padding(.leading, 14)
         .padding(.trailing, 12)
@@ -1104,14 +1120,15 @@ private struct OpenPetsBubbleContentView: View {
     static func size(for bubble: PetBubble, maxWidth: CGFloat = 260, messageAreaHeight: CGFloat = 84) -> CGSize {
         let width = min(260, maxWidth)
         let maxHeight = messageAreaHeight - 12
+        let actionHeight: CGFloat = bubble.action == nil ? 0 : 25
         guard let detail = bubble.detail, !detail.isEmpty else {
-            return CGSize(width: width, height: min(maxHeight, 44))
+            return CGSize(width: width, height: min(maxHeight, 44 + actionHeight))
         }
 
         let bodyLineCount = measuredBodyLineCount(for: detail, bubbleWidth: width)
         let oneLineBodyHeight: CGFloat = 56
         let bodyLineHeight: CGFloat = 16
-        let desiredHeight = oneLineBodyHeight + CGFloat(bodyLineCount - 1) * bodyLineHeight
+        let desiredHeight = oneLineBodyHeight + actionHeight + CGFloat(bodyLineCount - 1) * bodyLineHeight
         return CGSize(
             width: width,
             height: min(maxHeight, desiredHeight)
@@ -1152,6 +1169,14 @@ private struct OpenPetsBubbleContentView: View {
                 Circle()
                     .fill(Color(nsColor: .systemGreen))
                 Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+        case .attention:
+            ZStack {
+                Circle()
+                    .fill(Color(nsColor: .systemRed))
+                Image(systemName: "exclamationmark")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.white)
             }

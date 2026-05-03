@@ -41,27 +41,18 @@ private func openPetsTools() -> [Tool] {
             annotations: .init(destructiveHint: true, idempotentHint: true)
         ),
         Tool(
-            name: "set_pet_message",
-            description: "Show a message bubble on the OpenPets desktop pet.",
+            name: "notify",
+            description: "Show one OpenPets notification with title, text, status, and an optional callback action button.",
             inputSchema: objectSchema(
                 properties: [
-                    "text": property(type: "string", description: "Message text to show."),
-                    "ttlSeconds": property(type: "number", description: "Optional lifetime in seconds."),
-                    "priority": property(type: "integer", description: "Optional priority value.")
-                ],
-                required: ["text"]
-            )
-        ),
-        Tool(
-            name: "set_pet_status",
-            description: "Set a status on the OpenPets desktop pet.",
-            inputSchema: objectSchema(
-                properties: [
-                    "kind": property(type: "string", description: "Status kind, such as running, review, done, or failed."),
-                    "message": property(type: "string", description: "Optional status detail."),
+                    "title": property(type: "string", description: "Notification title."),
+                    "text": property(type: "string", description: "Notification body text."),
+                    "status": property(type: "string", description: "Status kind, such as running, review, done, failed, waiting, reply, answer, or success."),
+                    "x-url-callback": property(type: "string", description: "Optional x-url-callback URL to open when the action button is clicked."),
+                    "buttonLabel": property(type: "string", description: "Optional action button label, such as reply, review, or answer."),
                     "ttlSeconds": property(type: "number", description: "Optional lifetime in seconds.")
                 ],
-                required: ["kind"]
+                required: ["title", "text", "status"]
             )
         ),
         Tool(
@@ -112,25 +103,26 @@ private func callOpenPetsTool(
             let message = await controller.stopPetForMCP()
             return ok(message)
 
-        case "set_pet_message":
+        case "notify":
+            guard let title = arguments["title"]?.stringValue, !title.isEmpty else {
+                return failure("Missing required string argument: title")
+            }
             guard let text = arguments["text"]?.stringValue, !text.isEmpty else {
                 return failure("Missing required string argument: text")
             }
-            return await commandResult(controller.sendPetCommand(.setMessage(
-                text: text,
-                ttlSeconds: number(arguments["ttlSeconds"]),
-                priority: arguments["priority"]?.intValue
-            )))
-
-        case "set_pet_status":
-            guard let kind = arguments["kind"]?.stringValue, !kind.isEmpty else {
-                return failure("Missing required string argument: kind")
+            guard let status = arguments["status"]?.stringValue, !status.isEmpty else {
+                return failure("Missing required string argument: status")
             }
-            return await commandResult(controller.sendPetCommand(.setStatus(
-                kind: kind,
-                message: arguments["message"]?.stringValue,
+            let notification = PetNotification(
+                title: title,
+                text: text,
+                status: status,
+                xURLCallback: arguments["x-url-callback"]?.stringValue,
+                buttonLabel: arguments["buttonLabel"]?.stringValue,
                 ttlSeconds: number(arguments["ttlSeconds"])
-            )))
+            )
+            let response = try await controller.notifyForMCP(notification)
+            return commandResult(response)
 
         case "play_pet_animation":
             guard let name = arguments["name"]?.stringValue, let animation = PetAnimation(cliValue: name) else {

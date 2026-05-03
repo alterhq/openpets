@@ -158,8 +158,14 @@ final class OpenPetsTests: XCTestCase {
 
     func testPetCommandRoundTripCoding() throws {
         let commands: [PetCommand] = [
-            .setMessage(text: "hello", ttlSeconds: 2, priority: 3),
-            .setStatus(kind: "review", message: "Reviewing changes", ttlSeconds: 4),
+            .notify(PetNotification(
+                title: "Review ready",
+                text: "Changes are ready to inspect.",
+                status: "review",
+                xURLCallback: "openpets://review?id=123",
+                buttonLabel: "Review",
+                ttlSeconds: 30
+            )),
             .playAnimation(name: .waving, loop: false, ttlSeconds: 1),
             .clearMessage,
             .ping,
@@ -173,6 +179,25 @@ final class OpenPetsTests: XCTestCase {
         }
     }
 
+    func testPetNotificationUsesXURLCallbackCodingKey() throws {
+        let notification = PetNotification(
+            title: "Reply needed",
+            text: "A user asked a follow-up.",
+            status: "reply",
+            xURLCallback: "openpets://reply?id=42",
+            buttonLabel: "Reply",
+            ttlSeconds: 10
+        )
+
+        let data = try JSONEncoder().encode(notification)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(json["x-url-callback"] as? String, "openpets://reply?id=42")
+
+        let decoded = try JSONDecoder().decode(PetNotification.self, from: data)
+        XCTAssertEqual(decoded, notification)
+    }
+
     func testUnixSocketClientServerFraming() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("openpets-\(UUID().uuidString).sock")
@@ -181,8 +206,8 @@ final class OpenPetsTests: XCTestCase {
             switch command {
             case .ping:
                 PetResponse(ok: true, message: "pong")
-            case .setMessage(let text, _, _):
-                PetResponse(ok: true, message: text)
+            case .notify(let notification):
+                PetResponse(ok: true, message: notification.title)
             default:
                 PetResponse(ok: false, message: "unexpected")
             }
@@ -193,8 +218,8 @@ final class OpenPetsTests: XCTestCase {
         let client = OpenPetsClient(socketPath: socketPath)
         XCTAssertEqual(try client.send(.ping), PetResponse(ok: true, message: "pong"))
         XCTAssertEqual(
-            try client.send(.setMessage(text: "hello", ttlSeconds: nil, priority: nil)),
-            PetResponse(ok: true, message: "hello")
+            try client.send(.notify(PetNotification(title: "Hello", text: "hello", status: "message"))),
+            PetResponse(ok: true, message: "Hello")
         )
     }
 
