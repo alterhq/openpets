@@ -20,64 +20,105 @@ func makeOpenPetsMCPServer(controller: OpenPetsMenuBarController) async -> Serve
     return server
 }
 
-private func openPetsTools() -> [Tool] {
+let openPetsStatusValues = [
+    "running",
+    "review",
+    "done",
+    "failed",
+    "waiting",
+    "message"
+]
+
+let openPetsAnimationValues = [
+    "idle",
+    "running-right",
+    "running-left",
+    "waving",
+    "jumping",
+    "failed",
+    "waiting",
+    "running",
+    "review"
+]
+
+func openPetsTools() -> [Tool] {
     [
         Tool(
             name: "get_openpets_status",
-            description: "Get OpenPets MCP server and pet status.",
+            description: "Check whether the OpenPets MCP server is running and whether the desktop pet is awake. Use this before sending pet commands if you are unsure whether the pet is available.",
             inputSchema: objectSchema(),
             annotations: .init(readOnlyHint: true)
         ),
         Tool(
             name: "wake_pet",
-            description: "Wake the OpenPets desktop pet.",
+            description: "Start or bring back the OpenPets desktop pet. Use this before notify or animation tools when the pet is not running.",
             inputSchema: objectSchema(),
             annotations: .init(destructiveHint: false, idempotentHint: true)
         ),
         Tool(
             name: "stop_pet",
-            description: "Stop the OpenPets desktop pet.",
+            description: "Stop the OpenPets desktop pet. Use only when the user asks to hide, quit, stop, or dismiss the pet.",
             inputSchema: objectSchema(),
             annotations: .init(destructiveHint: true, idempotentHint: true)
         ),
         Tool(
             name: "notify",
-            description: "Show one OpenPets notification with title, text, status, and an optional callback action button.",
+            description: "Show a message bubble above the OpenPets desktop pet and choose a status-driven animation. Use this to tell the user about task progress, completion, errors, review needs, or replies. This tool automatically wakes the pet if needed; if delivery fails, it returns the current OpenPets status.",
             inputSchema: objectSchema(
                 properties: [
-                    "title": property(type: "string", description: "Notification title."),
-                    "text": property(type: "string", description: "Notification body text."),
-                    "status": property(type: "string", description: "Status kind, such as running, review, done, failed, waiting, reply, answer, or success."),
-                    "x-url-callback": property(type: "string", description: "Optional x-url-callback URL to open when the action button is clicked."),
-                    "buttonLabel": property(type: "string", description: "Optional action button label, such as reply, review, or answer."),
-                    "ttlSeconds": property(type: "number", description: "Optional lifetime in seconds.")
+                    "title": property(type: "string", description: "Short message title shown in the pet bubble."),
+                    "text": property(
+                        type: "string",
+                        description: "Message body shown under the title. Keep it concise; use the current task result or next action."
+                    ),
+                    "status": property(
+                        type: "string",
+                        description: "Required status that controls the pet animation and bubble indicator. Valid values: \(openPetsStatusValues.joined(separator: ", ")).",
+                        enumValues: openPetsStatusValues
+                    ),
+                    "x-url-callback": property(
+                        type: "string",
+                        description: "Optional URL opened when the bubble action button is clicked. Use only for an actionable destination."
+                    ),
+                    "buttonLabel": property(
+                        type: "string",
+                        description: "Optional action button label, such as Open, Reply, Review, or View."
+                    ),
+                    "ttlSeconds": property(
+                        type: "number",
+                        description: "Optional number of seconds before the message auto-clears. Omit to keep the message visible until replaced or cleared."
+                    )
                 ],
                 required: ["title", "text", "status"]
             )
         ),
         Tool(
             name: "play_pet_animation",
-            description: "Play one OpenPets animation.",
+            description: "Play a pet animation without showing a message. Use notify instead when you need to communicate text to the user.",
             inputSchema: objectSchema(
                 properties: [
                     "name": property(
                         type: "string",
-                        description: "Animation name: idle, running-right, running-left, waving, jumping, failed, waiting, running, or review."
+                        description: "Animation to play. Valid values: \(openPetsAnimationValues.joined(separator: ", ")). Aliases accepted by the implementation: right, left, runningRight, runningLeft.",
+                        enumValues: openPetsAnimationValues
                     ),
-                    "loop": property(type: "boolean", description: "Whether to loop the animation."),
-                    "ttlSeconds": property(type: "number", description: "Optional lifetime in seconds.")
+                    "loop": property(type: "boolean", description: "Whether to loop the animation. Defaults to true when omitted."),
+                    "ttlSeconds": property(
+                        type: "number",
+                        description: "Optional number of seconds before the animation returns to idle. Useful for temporary non-message animations."
+                    )
                 ],
                 required: ["name"]
             )
         ),
         Tool(
             name: "clear_pet_message",
-            description: "Clear the OpenPets message bubble.",
+            description: "Clear the current OpenPets message bubble without stopping the pet.",
             inputSchema: objectSchema()
         ),
         Tool(
             name: "ping_pet",
-            description: "Ping the OpenPets desktop pet.",
+            description: "Ping the desktop pet process to confirm it can receive commands. This is a lightweight connectivity check.",
             inputSchema: objectSchema(),
             annotations: .init(readOnlyHint: true)
         )
@@ -174,11 +215,15 @@ private func objectSchema(properties: [String: Value] = [:], required: [String] 
     return .object(schema)
 }
 
-private func property(type: String, description: String) -> Value {
-    .object([
+private func property(type: String, description: String, enumValues: [String] = []) -> Value {
+    var schema: [String: Value] = [
         "type": .string(type),
         "description": .string(description)
-    ])
+    ]
+    if !enumValues.isEmpty {
+        schema["enum"] = .array(enumValues.map { .string($0) })
+    }
+    return .object(schema)
 }
 
 private func number(_ value: Value?) -> Double? {

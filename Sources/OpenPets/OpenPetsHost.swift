@@ -614,14 +614,7 @@ private final class PetHostController {
     }
 
     private func indicator(forStatusKind kind: String) -> PetBubbleIndicator {
-        switch kind.lowercased() {
-        case "done", "success", "completed", "complete", "committed":
-            .success
-        case "failed", "failure", "error":
-            .attention
-        default:
-            .working
-        }
+        openPetsBubbleIndicator(forStatusKind: kind)
     }
 
     private func action(for notification: PetNotification) -> PetBubbleAction? {
@@ -685,10 +678,24 @@ struct PetBubbleAction {
     var url: URL
 }
 
-enum PetBubbleIndicator {
+enum PetBubbleIndicator: Equatable {
+    case none
     case working
     case success
     case attention
+}
+
+func openPetsBubbleIndicator(forStatusKind kind: String) -> PetBubbleIndicator {
+    switch kind.lowercased() {
+    case "done", "success", "completed", "complete", "committed":
+        .success
+    case "failed", "failure", "error":
+        .attention
+    case "attention", "reply", "message":
+        .none
+    default:
+        .working
+    }
 }
 
 @MainActor
@@ -1100,8 +1107,10 @@ private struct OpenPetsBubbleContentView: View {
                 }
 
                 Spacer(minLength: 4)
-                indicator(for: bubble.indicator)
-                    .frame(width: 16, height: 16)
+                if bubble.indicator != .none {
+                    indicator(for: bubble.indicator)
+                        .frame(width: 16, height: 16)
+                }
             }
         }
         .padding(.leading, 14)
@@ -1160,6 +1169,8 @@ private struct OpenPetsBubbleContentView: View {
     @ViewBuilder
     private func indicator(for indicator: PetBubbleIndicator) -> some View {
         switch indicator {
+        case .none:
+            EmptyView()
         case .working:
             ProgressView()
                 .scaleEffect(0.5)

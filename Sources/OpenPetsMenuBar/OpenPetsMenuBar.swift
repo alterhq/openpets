@@ -289,8 +289,30 @@ final class OpenPetsMenuBarController: NSObject {
     }
 
     func notifyForMCP(_ notification: PetNotification) throws -> PetResponse {
-        try wakePet()
-        return sendPetCommand(.notify(notification))
+        let wasRunning = petSession?.isRunning == true
+        do {
+            try wakePet()
+        } catch {
+            refreshMenu()
+            return PetResponse(
+                ok: false,
+                message: petNotReadyMessage(
+                    "OpenPets tried to wake the pet automatically before sending notify, but startup failed: \(error.localizedDescription)"
+                )
+            )
+        }
+
+        let response = sendPetCommand(.notify(notification))
+        guard response.ok else {
+            let attemptedAction = wasRunning
+                ? "The pet was running, but notify failed"
+                : "OpenPets woke the pet automatically, but notify failed"
+            return PetResponse(
+                ok: false,
+                message: petNotReadyMessage("\(attemptedAction): \(response.message ?? "unknown error")")
+            )
+        }
+        return response
     }
 
     func sendPetCommand(_ command: PetCommand) -> PetResponse {
@@ -348,6 +370,16 @@ final class OpenPetsMenuBarController: NSObject {
         Active Pet: \(petName)
         Socket: \(configuration.socketPath)
         Config Folder: \(OpenPetsPaths.defaultConfigurationDirectory.path)
+        """
+    }
+
+    private func petNotReadyMessage(_ detail: String) -> String {
+        """
+        Pet is not ready.
+        \(detail)
+
+        Current OpenPets status:
+        \(statusText())
         """
     }
 

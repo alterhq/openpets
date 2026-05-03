@@ -44,7 +44,11 @@ let package = Package(
         ),
         .testTarget(
             name: "OpenPetsTests",
-            dependencies: ["OpenPetsCore"]
+            dependencies: [
+                "OpenPetsCore",
+                "OpenPetsMenuBar",
+                .product(name: "MCP", package: "swift-sdk")
+            ]
         )
     ]
 )

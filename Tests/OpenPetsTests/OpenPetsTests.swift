@@ -1,7 +1,9 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import MCP
 @testable import OpenPetsCore
+@testable import OpenPetsMenuBar
 import UniformTypeIdentifiers
 import XCTest
 
@@ -116,6 +118,62 @@ final class OpenPetsTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(layout.cardFrame.minX, OpenPetsMessageLayout.sideInset)
             XCTAssertGreaterThanOrEqual(layout.toggleFrame.minX, OpenPetsMessageLayout.sideInset)
         }
+    }
+
+    func testMCPToolDescriptionsGuideAgentUsage() throws {
+        let tools = openPetsTools()
+        let descriptions = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0.description ?? "") })
+
+        XCTAssertTrue(descriptions.values.allSatisfy { !$0.isEmpty })
+        XCTAssertTrue(try XCTUnwrap(descriptions["get_openpets_status"]).contains("Use this before sending pet commands"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["wake_pet"]).contains("when the pet is not running"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["stop_pet"]).contains("hide, quit, stop, or dismiss"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["notify"]).contains("status-driven animation"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["notify"]).contains("automatically wakes the pet"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["notify"]).contains("returns the current OpenPets status"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["play_pet_animation"]).contains("Use notify instead"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["clear_pet_message"]).contains("without stopping the pet"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["ping_pet"]).contains("connectivity check"))
+    }
+
+    func testMCPNotifyStatusSchemaListsValidStatuses() throws {
+        let statusSchema = try schemaProperty(toolName: "notify", propertyName: "status")
+        let description = try XCTUnwrap(statusSchema["description"]?.stringValue)
+        let enumValues = try XCTUnwrap(statusSchema["enum"]?.arrayValue?.compactMap(\.stringValue))
+
+        XCTAssertEqual(enumValues, openPetsStatusValues)
+        for status in openPetsStatusValues {
+            XCTAssertTrue(description.contains(status))
+        }
+        XCTAssertFalse(description.contains("answer"))
+        XCTAssertFalse(enumValues.contains("task"))
+        XCTAssertFalse(enumValues.contains("working"))
+        XCTAssertFalse(enumValues.contains("reviewing"))
+        XCTAssertFalse(enumValues.contains("success"))
+        XCTAssertFalse(enumValues.contains("queued"))
+        XCTAssertFalse(enumValues.contains("reply"))
+    }
+
+    func testMCPAnimationSchemaListsValidAnimationNames() throws {
+        let animationSchema = try schemaProperty(toolName: "play_pet_animation", propertyName: "name")
+        let description = try XCTUnwrap(animationSchema["description"]?.stringValue)
+        let enumValues = try XCTUnwrap(animationSchema["enum"]?.arrayValue?.compactMap(\.stringValue))
+
+        XCTAssertEqual(enumValues, openPetsAnimationValues)
+        for animation in openPetsAnimationValues {
+            XCTAssertTrue(description.contains(animation))
+        }
+        XCTAssertTrue(description.contains("runningRight"))
+        XCTAssertTrue(description.contains("runningLeft"))
+    }
+
+    func testMessageStatusDoesNotUseProgressIndicator() {
+        XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "message"), .none)
+        XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "reply"), .none)
+        XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "attention"), .none)
+        XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "running"), .working)
+        XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "done"), .success)
+        XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "failed"), .attention)
     }
 
     func testDefaultDisplayConfigurationUsesSmallScale() {
@@ -393,5 +451,12 @@ final class OpenPetsTests: XCTestCase {
 
         CGImageDestinationAddImage(destination, image, nil)
         XCTAssertTrue(CGImageDestinationFinalize(destination))
+    }
+
+    private func schemaProperty(toolName: String, propertyName: String) throws -> [String: Value] {
+        let tool = try XCTUnwrap(openPetsTools().first { $0.name == toolName })
+        let inputSchema = try XCTUnwrap(tool.inputSchema.objectValue)
+        let properties = try XCTUnwrap(inputSchema["properties"]?.objectValue)
+        return try XCTUnwrap(properties[propertyName]?.objectValue)
     }
 }
