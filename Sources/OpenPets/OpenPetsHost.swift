@@ -757,15 +757,21 @@ struct PetBubbleAction: Equatable {
 enum PetBubbleIndicator: Equatable {
     case none
     case working
+    case waiting
+    case review
     case success
     case attention
 }
 
 func openPetsBubbleIndicator(forStatusKind kind: String) -> PetBubbleIndicator {
     switch kind.lowercased() {
+    case "waiting":
+        .waiting
+    case "review", "reviewing":
+        .review
     case "done", "success", "completed", "complete", "committed":
         .success
-    case "failed", "failure", "error":
+    case "failed", "fail", "failure", "error":
         .attention
     case "attention", "reply", "message":
         .none
@@ -1246,6 +1252,22 @@ private struct OpenPetsBubbleContentView: View {
             ProgressView()
                 .scaleEffect(0.5)
                 .opacity(0.7)
+        case .waiting:
+            ZStack {
+                Circle()
+                    .fill(Color(nsColor: .systemOrange))
+                Image(systemName: "clock")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+        case .review:
+            ZStack {
+                Circle()
+                    .fill(Color(nsColor: .systemPurple))
+                Image(systemName: "eye")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white)
+            }
         case .success:
             ZStack {
                 Circle()
@@ -1258,7 +1280,7 @@ private struct OpenPetsBubbleContentView: View {
             ZStack {
                 Circle()
                     .fill(Color(nsColor: .systemRed))
-                Image(systemName: "exclamationmark")
+                Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.white)
             }
@@ -1442,7 +1464,7 @@ private struct OpenPetsMessagingPreviewGallery: View {
                 bubble: PetBubble(
                     title: "Waiting",
                     detail: nil,
-                    indicator: .working
+                    indicator: .waiting
                 ),
                 isCollapsed: false,
                 activeMessageCount: 1,

@@ -266,7 +266,11 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "reply"), .none)
         XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "attention"), .none)
         XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "running"), .working)
+        XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "waiting"), .waiting)
+        XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "review"), .review)
+        XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "reviewing"), .review)
         XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "done"), .success)
+        XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "fail"), .attention)
         XCTAssertEqual(openPetsBubbleIndicator(forStatusKind: "failed"), .attention)
     }
 
