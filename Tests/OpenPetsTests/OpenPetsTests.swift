@@ -190,6 +190,205 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(actionLayout.cardFrame.height, plainLayout.cardFrame.height)
     }
 
+    func testSpriteFrameStoreReusesCachedAssets() throws {
+        let image = try makeAlphaTestImage(width: 2, height: 1, alphas: [0, 255])
+        let store = PetSpriteFrameStore(frames: [.idle: [image]], spriteSize: CGSize(width: 20, height: 10))
+
+        let first = try XCTUnwrap(store.asset(for: .idle, frameIndex: 0))
+        let repeated = try XCTUnwrap(store.asset(for: .idle, frameIndex: 12))
+
+        XCTAssertTrue(first === repeated)
+        XCTAssertEqual(first.renderedImage.size, CGSize(width: 20, height: 10))
+    }
+
+    func testPetSpriteVisibilityComputesBoundsWithoutDrivingHitTesting() throws {
+        let image = try makeAlphaTestImage(width: 3, height: 1, alphas: [0, 255, 0])
+        let visibility = try XCTUnwrap(PetSpriteVisibility(image: image))
+
+        XCTAssertEqual(
+            visibility.visibleBounds(in: CGRect(x: 10, y: 20, width: 30, height: 10)),
+            CGRect(x: 20, y: 20, width: 10, height: 10)
+        )
+    }
+
+    func testPetDragTrackerMovesWindowOriginByCursorDelta() throws {
+        var tracker = PetDragTracker()
+        tracker.start(screenLocation: CGPoint(x: 10, y: 20), windowOrigin: CGPoint(x: 100, y: 200), timestamp: 0)
+
+        let update = try XCTUnwrap(tracker.drag(to: CGPoint(x: 32, y: 47), timestamp: 0.05))
+
+        XCTAssertTrue(update.isDragging)
+        XCTAssertEqual(update.windowOrigin, CGPoint(x: 122, y: 227))
+    }
+
+    func testPetDragTrackerSmallMovementRemainsClick() throws {
+        var tracker = PetDragTracker()
+        tracker.start(screenLocation: CGPoint(x: 10, y: 20), windowOrigin: CGPoint(x: 100, y: 200), timestamp: 0)
+
+        let update = try XCTUnwrap(tracker.drag(to: CGPoint(x: 12, y: 23), timestamp: 0.02))
+        let end = tracker.end(at: CGPoint(x: 12, y: 23), timestamp: 0.03)
+
+        XCTAssertFalse(update.isDragging)
+        XCTAssertEqual(update.windowOrigin, CGPoint(x: 100, y: 200))
+        XCTAssertFalse(end.wasDragging)
+        XCTAssertEqual(end.releaseVelocity, .zero)
+    }
+
+    func testPetDragTrackerReleaseReturnsVelocityAndClearsState() throws {
+        var tracker = PetDragTracker()
+        tracker.start(screenLocation: CGPoint(x: 0, y: 0), windowOrigin: CGPoint(x: 40, y: 50), timestamp: 0)
+        _ = try XCTUnwrap(tracker.drag(to: CGPoint(x: 30, y: 0), timestamp: 0.05))
+
+        let end = tracker.end(at: CGPoint(x: 60, y: 0), timestamp: 0.10)
+
+        XCTAssertTrue(end.wasDragging)
+        XCTAssertEqual(end.releaseVelocity.dx, 600, accuracy: 0.001)
+        XCTAssertEqual(end.releaseVelocity.dy, 0, accuracy: 0.001)
+        XCTAssertNil(tracker.drag(to: CGPoint(x: 90, y: 0), timestamp: 0.15))
+    }
+
+    func testPetDragTrackerEmitsDirectionChangesOnlyPastThreshold() throws {
+        var tracker = PetDragTracker()
+        tracker.start(screenLocation: CGPoint(x: 0, y: 0), windowOrigin: .zero, timestamp: 0)
+
+        let mostlyVertical = try XCTUnwrap(tracker.drag(to: CGPoint(x: 0.4, y: 5), timestamp: 0.01))
+        let right = try XCTUnwrap(tracker.drag(to: CGPoint(x: 1.2, y: 5), timestamp: 0.02))
+        let stillRight = try XCTUnwrap(tracker.drag(to: CGPoint(x: 2.0, y: 5), timestamp: 0.03))
+        let left = try XCTUnwrap(tracker.drag(to: CGPoint(x: 1.0, y: 5), timestamp: 0.04))
+
+        XCTAssertNil(mostlyVertical.directionChange)
+        XCTAssertEqual(right.directionChange, .runningRight)
+        XCTAssertNil(stillRight.directionChange)
+        XCTAssertEqual(left.directionChange, .runningLeft)
+    }
+
+    @MainActor
+    func testMinimalMessageLayoutUsesStablePetBoundsWithoutMessages() {
+        let layout = OpenPetsMessageLayout.makeMinimal(
+            messages: [],
+            hiddenMessageCount: 0,
+            spriteSize: CGSize(width: 20, height: 10),
+            stableSpriteBounds: CGRect(x: 5, y: 2, width: 10, height: 6),
+            messageAreaHeight: 108
+        )
+
+        XCTAssertEqual(layout.containerSize, CGSize(width: 10, height: 6))
+        XCTAssertEqual(layout.petFrame, CGRect(x: 0, y: 0, width: 10, height: 6))
+        XCTAssertEqual(layout.spriteFrame, CGRect(x: -5, y: -2, width: 20, height: 10))
+        XCTAssertTrue(layout.cardFrames.isEmpty)
+        XCTAssertTrue(layout.toggleFrame.isEmpty)
+    }
+
+    @MainActor
+    func testBubbleLayoutPreservesPetAnchorDuringResize() {
+        let petAnchor = CGPoint(x: 100, y: 200)
+        let emptyLayout = OpenPetsMessageLayout.makeMinimal(
+            messages: [],
+            hiddenMessageCount: 0,
+            spriteSize: CGSize(width: 20, height: 10),
+            stableSpriteBounds: CGRect(x: 5, y: 2, width: 10, height: 6),
+            messageAreaHeight: 108
+        )
+        let bubbleLayout = OpenPetsMessageLayout.makeMinimal(
+            messages: [PetMessage(threadId: "thread-1", bubble: PetBubble(title: "Build running", detail: nil, indicator: .working))],
+            hiddenMessageCount: 0,
+            spriteSize: CGSize(width: 20, height: 10),
+            stableSpriteBounds: CGRect(x: 5, y: 2, width: 10, height: 6),
+            messageAreaHeight: 108
+        )
+
+        let emptyOrigin = PetWindowPositioning.windowOrigin(preservingPetAnchor: petAnchor, petFrame: emptyLayout.petFrame)
+        let bubbleOrigin = PetWindowPositioning.windowOrigin(preservingPetAnchor: petAnchor, petFrame: bubbleLayout.petFrame)
+
+        XCTAssertEqual(CGPoint(x: emptyOrigin.x + emptyLayout.petFrame.minX, y: emptyOrigin.y + emptyLayout.petFrame.minY), petAnchor)
+        XCTAssertEqual(CGPoint(x: bubbleOrigin.x + bubbleLayout.petFrame.minX, y: bubbleOrigin.y + bubbleLayout.petFrame.minY), petAnchor)
+        XCTAssertGreaterThan(bubbleLayout.containerSize.width, emptyLayout.containerSize.width)
+        XCTAssertLessThan(bubbleOrigin.x, emptyOrigin.x)
+        XCTAssertGreaterThanOrEqual(bubbleLayout.toggleFrame.minY, 0)
+        XCTAssertLessThanOrEqual(bubbleLayout.toggleFrame.maxY, bubbleLayout.containerSize.height)
+    }
+
+    @MainActor
+    func testMessagePanelLayoutDoesNotIncludePetBoundsInPanelSize() {
+        let layout = OpenPetsMessageLayout.makeMessagePanel(
+            messages: [PetMessage(threadId: "thread-1", bubble: PetBubble(title: "Build running", detail: nil, indicator: .working))],
+            hiddenMessageCount: 0,
+            petSize: CGSize(width: 80, height: 100),
+            messageAreaHeight: 108
+        )
+        let panelOrigin = PetWindowPositioning.windowOrigin(
+            preservingPetAnchor: CGPoint(x: 300, y: 400),
+            petFrame: layout.petFrame
+        )
+
+        XCTAssertLessThan(layout.containerSize.height, 100)
+        XCTAssertGreaterThanOrEqual(layout.toggleFrame.minY, layout.petFrame.maxY)
+        XCTAssertGreaterThanOrEqual(layout.toggleFrame.minY, 0)
+        XCTAssertLessThanOrEqual(layout.toggleFrame.maxY, layout.containerSize.height)
+        XCTAssertGreaterThanOrEqual(layout.cardFrame.minY, layout.petFrame.maxY)
+        XCTAssertGreaterThanOrEqual(layout.cardFrame.minY, 0)
+        XCTAssertLessThanOrEqual(layout.cardFrame.maxY, layout.containerSize.height)
+        XCTAssertEqual(CGPoint(x: panelOrigin.x + layout.petFrame.minX, y: panelOrigin.y + layout.petFrame.minY), CGPoint(x: 300, y: 400))
+    }
+
+    @MainActor
+    func testLegacyWindowOriginPositionConvertsToPetAnchor() {
+        let legacySize = PetWindowPositioning.legacyContentSize(
+            spriteSize: CGSize(width: 20, height: 10),
+            messageAreaHeight: 108
+        )
+        let anchor = PetWindowPositioning.initialPetAnchor(
+            storedPosition: StoredPetPosition(CGPoint(x: 10, y: 20), kind: .windowOrigin),
+            legacyContentSize: legacySize,
+            spriteSize: CGSize(width: 20, height: 10),
+            stableSpriteBounds: CGRect(x: 5, y: 2, width: 10, height: 6)
+        )
+
+        XCTAssertEqual(anchor, CGPoint(x: 299, y: 22))
+    }
+
+    @MainActor
+    func testPetHostViewOnlyHitsInteractivePixelsInsideMinimalFrame() throws {
+        let image = try makeAlphaTestImage(width: 3, height: 1, alphas: [255, 0, 255])
+        let view = PetHostView(
+            spriteSize: CGSize(width: 30, height: 10),
+            stableSpriteBounds: CGRect(x: 0, y: 0, width: 30, height: 10),
+            frames: [.idle: [image]]
+        )
+
+        XCTAssertEqual(view.bounds.size, CGSize(width: 30, height: 10))
+        XCTAssertNotNil(view.hitTest(CGPoint(x: 5, y: 5)))
+        XCTAssertNotNil(view.hitTest(CGPoint(x: 15, y: 5)))
+        XCTAssertNotNil(view.hitTest(CGPoint(x: 25, y: 5)))
+        XCTAssertNil(view.hitTest(CGPoint(x: 31, y: 5)))
+    }
+
+    @MainActor
+    func testPetHostViewUsesNarrowStableBoundsWithoutTransparentMargin() throws {
+        let image = try makeAlphaTestImage(
+            width: 3,
+            height: 3,
+            alphas: [
+                0, 0, 0,
+                0, 255, 0,
+                0, 0, 0
+            ]
+        )
+        let stableBounds = try XCTUnwrap(PetSpriteVisibility(image: image)?.visibleBounds(
+            in: CGRect(x: 0, y: 0, width: 30, height: 30)
+        ))
+        let view = PetHostView(
+            spriteSize: CGSize(width: 30, height: 30),
+            stableSpriteBounds: stableBounds,
+            frames: [.idle: [image]]
+        )
+
+        XCTAssertEqual(stableBounds, CGRect(x: 10, y: 10, width: 10, height: 10))
+        XCTAssertEqual(view.bounds.size, CGSize(width: 10, height: 10))
+        XCTAssertNotNil(view.hitTest(CGPoint(x: 5, y: 5)))
+        XCTAssertNil(view.hitTest(CGPoint(x: 11, y: 5)))
+    }
+
     @MainActor
     func testCollapsedMessageLayoutHidesCardsAndKeepsToggleControl() {
         let messages = (1...3).map { index in
@@ -610,7 +809,15 @@ final class OpenPetsTests: XCTestCase {
 
         let reloaded = PetPositionStore(url: storeURL)
         XCTAssertEqual(reloaded.loadPosition(forPetID: "starcorn"), CGPoint(x: 12, y: 34))
+        XCTAssertEqual(reloaded.loadStoredPosition(forPetID: "starcorn")?.kind, .petAnchor)
         XCTAssertNil(reloaded.loadPosition(forPetID: "other"))
+    }
+
+    func testStoredPetPositionDecodesLegacyWindowOrigin() throws {
+        let position = try JSONDecoder().decode(StoredPetPosition.self, from: Data(#"{"x":12,"y":34}"#.utf8))
+
+        XCTAssertEqual(position.point, CGPoint(x: 12, y: 34))
+        XCTAssertEqual(position.kind, .windowOrigin)
     }
 
     func testPetLaunchMotionRequiresStrongRelease() {
@@ -735,6 +942,43 @@ final class OpenPetsTests: XCTestCase {
 
         CGImageDestinationAddImage(destination, image, nil)
         XCTAssertTrue(CGImageDestinationFinalize(destination))
+    }
+
+    private func makeAlphaTestImage(width: Int, height: Int, alphas: [UInt8]) throws -> CGImage {
+        XCTAssertEqual(alphas.count, width * height)
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        for (index, alpha) in alphas.enumerated() {
+            pixels[index * bytesPerPixel] = alpha
+            pixels[index * bytesPerPixel + 1] = alpha
+            pixels[index * bytesPerPixel + 2] = alpha
+            pixels[index * bytesPerPixel + 3] = alpha
+        }
+
+        guard
+            let provider = CGDataProvider(data: Data(pixels) as CFData),
+            let image = CGImage(
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bitsPerPixel: 32,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo(
+                    rawValue: CGImageAlphaInfo.premultipliedLast.rawValue
+                        | CGBitmapInfo.byteOrder32Big.rawValue
+                ),
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+            )
+        else {
+            throw NSError(domain: "OpenPetsTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not create alpha test image"])
+        }
+
+        return image
     }
 
     private func makePetBundle(id: String, at directory: URL) throws {

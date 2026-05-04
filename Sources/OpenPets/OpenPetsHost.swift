@@ -300,11 +300,78 @@ private final class PetHostCommandBridge: @unchecked Sendable {
 }
 
 @MainActor
+struct PetWindowPositioning {
+    static func windowOrigin(preservingPetAnchor petAnchor: CGPoint, petFrame: CGRect) -> CGPoint {
+        CGPoint(
+            x: petAnchor.x - petFrame.minX,
+            y: petAnchor.y - petFrame.minY
+        )
+    }
+
+    static func legacyContentSize(spriteSize: CGSize, messageAreaHeight: CGFloat) -> CGSize {
+        CGSize(
+            width: max(316, spriteSize.width + 120),
+            height: spriteSize.height + messageAreaHeight
+        )
+    }
+
+    static func initialPetAnchor(
+        storedPosition: StoredPetPosition?,
+        legacyContentSize: CGSize,
+        spriteSize: CGSize,
+        stableSpriteBounds: CGRect,
+        defaultWindowOrigin: CGPoint? = nil
+    ) -> CGPoint {
+        if let storedPosition {
+            switch storedPosition.kind {
+            case .petAnchor:
+                return storedPosition.point
+            case .windowOrigin:
+                let legacySpriteFrame = legacySpriteFrame(
+                    contentSize: legacyContentSize,
+                    spriteSize: spriteSize
+                )
+                return CGPoint(
+                    x: storedPosition.point.x + legacySpriteFrame.minX + stableSpriteBounds.minX,
+                    y: storedPosition.point.y + legacySpriteFrame.minY + stableSpriteBounds.minY
+                )
+            }
+        }
+
+        let defaultOrigin = defaultWindowOrigin ?? self.defaultWindowOrigin(contentSize: legacyContentSize)
+        let legacySpriteFrame = legacySpriteFrame(contentSize: legacyContentSize, spriteSize: spriteSize)
+        return CGPoint(
+            x: defaultOrigin.x + legacySpriteFrame.minX + stableSpriteBounds.minX,
+            y: defaultOrigin.y + legacySpriteFrame.minY + stableSpriteBounds.minY
+        )
+    }
+
+    static func legacySpriteFrame(contentSize: CGSize, spriteSize: CGSize) -> CGRect {
+        CGRect(
+            x: contentSize.width - spriteSize.width - OpenPetsMessageLayout.sideInset,
+            y: 0,
+            width: spriteSize.width,
+            height: spriteSize.height
+        )
+    }
+
+    static func defaultWindowOrigin(contentSize: CGSize) -> CGPoint {
+        let screenFrame = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
+        return CGPoint(
+            x: screenFrame.maxX - contentSize.width - 40,
+            y: screenFrame.minY + 40
+        )
+    }
+}
+
+@MainActor
 private final class PetHostController {
     private let petBundle: PetBundle
     private let positionStore: PetPositionStore
     private let window: NSPanel
     private let petView: PetHostView
+    private let messagePanel: NSPanel
+    private let messageView: PetMessagePanelView
     private let messageAreaHeight: CGFloat
     private var animationTimer: Timer?
     private var glideTimer: Timer?
@@ -331,21 +398,43 @@ private final class PetHostController {
             width: CGFloat(petBundle.atlas.cellWidth) * display.scale,
             height: CGFloat(petBundle.atlas.cellHeight) * display.scale
         )
-        let contentSize = CGSize(
-            width: max(316, spriteSize.width + 120),
-            height: spriteSize.height + messageAreaHeight
+        let legacyContentSize = PetWindowPositioning.legacyContentSize(
+            spriteSize: spriteSize,
+            messageAreaHeight: messageAreaHeight
+        )
+        let stableSpriteBounds = PetSpriteVisibility.stableVisibleBounds(
+            in: frames,
+            spriteSize: spriteSize
         )
         petView = PetHostView(
-            frame: CGRect(origin: .zero, size: contentSize),
             spriteSize: spriteSize,
-            messageAreaHeight: messageAreaHeight,
+            stableSpriteBounds: stableSpriteBounds,
             frames: frames
         )
+        messageView = PetMessagePanelView(
+            petSize: stableSpriteBounds.size,
+            messageAreaHeight: messageAreaHeight
+        )
 
-        let initialOrigin = positionStore.loadPosition(forPetID: petBundle.manifest.id)
-            ?? PetHostController.defaultWindowOrigin(contentSize: contentSize)
+        let initialAnchor = PetWindowPositioning.initialPetAnchor(
+            storedPosition: positionStore.loadStoredPosition(forPetID: petBundle.manifest.id),
+            legacyContentSize: legacyContentSize,
+            spriteSize: spriteSize,
+            stableSpriteBounds: stableSpriteBounds
+        )
+        let contentSize = petView.bounds.size
+        let initialOrigin = PetWindowPositioning.windowOrigin(
+            preservingPetAnchor: initialAnchor,
+            petFrame: petView.petAnchorFrame
+        )
         window = NSPanel(
             contentRect: CGRect(origin: initialOrigin, size: contentSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        messagePanel = NSPanel(
+            contentRect: CGRect(origin: .zero, size: .zero),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -360,20 +449,40 @@ private final class PetHostController {
         window.isOpaque = false
         window.level = .statusBar
 
+        messagePanel.backgroundColor = .clear
+        messagePanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        messagePanel.contentView = messageView
+        messagePanel.hasShadow = false
+        messagePanel.ignoresMouseEvents = false
+        messagePanel.isMovableByWindowBackground = false
+        messagePanel.isOpaque = false
+        messagePanel.level = .statusBar
+
         petView.onClick = { [weak self] in
             self?.play(.waving, loop: false, ttlSeconds: nil)
         }
         petView.onDragStart = { [weak self] in
             self?.cancelLaunchGlide()
+            self?.messagePanel.ignoresMouseEvents = true
+        }
+        petView.onDragMove = { [weak self] _ in
+            self?.positionMessagePanel()
         }
         petView.onDragDirectionChange = { [weak self] direction in
             self?.switchDragDirection(to: direction)
         }
         petView.onDragEnd = { [weak self] velocity, fallbackAnimation in
+            self?.messagePanel.ignoresMouseEvents = false
             self?.handleDragEnd(releaseVelocity: velocity, fallbackAnimation: fallbackAnimation)
         }
-        petView.onDismissMessage = { [weak self] threadId in
+        petView.onInteractionEnd = { [weak self] in
+            self?.messagePanel.ignoresMouseEvents = false
+        }
+        messageView.onDismissMessage = { [weak self] threadId in
             self?.clearBubble(threadId: threadId)
+        }
+        messageView.onLayoutChanged = { [weak self] in
+            self?.positionMessagePanel()
         }
 
         play(.idle, loop: true, ttlSeconds: nil)
@@ -381,6 +490,10 @@ private final class PetHostController {
 
     func show() {
         window.orderFrontRegardless()
+        if messageView.hasVisibleMessages {
+            positionMessagePanel()
+            messagePanel.orderFrontRegardless()
+        }
     }
 
     func close() {
@@ -390,6 +503,8 @@ private final class PetHostController {
         ttlWorkItem?.cancel()
         ttlWorkItem = nil
         cancelMessageWorkItems()
+        messagePanel.orderOut(nil)
+        messagePanel.close()
         window.orderOut(nil)
         window.close()
     }
@@ -418,12 +533,21 @@ private final class PetHostController {
     }
 
     func savePosition() {
-        try? positionStore.savePosition(window.frame.origin, forPetID: petBundle.manifest.id)
+        try? positionStore.savePosition(petAnchorInScreen(), kind: .petAnchor, forPetID: petBundle.manifest.id)
+    }
+
+    private func petAnchorInScreen() -> CGPoint {
+        CGPoint(
+            x: window.frame.origin.x + petView.petAnchorFrame.minX,
+            y: window.frame.origin.y + petView.petAnchorFrame.minY
+        )
     }
 
     private func setBubble(_ bubble: PetBubble, threadId: String, ttlSeconds: Double?) {
         messageWorkItems[threadId]?.cancel()
-        petView.setBubble(bubble, threadId: threadId)
+        messageView.setBubble(bubble, threadId: threadId)
+        positionMessagePanel()
+        messagePanel.orderFrontRegardless()
 
         guard let ttlSeconds, ttlSeconds > 0 else { return }
         let workItem = DispatchWorkItem { [weak self] in
@@ -438,7 +562,12 @@ private final class PetHostController {
     private func clearBubble(threadId: String) {
         messageWorkItems[threadId]?.cancel()
         messageWorkItems[threadId] = nil
-        petView.clearBubble(threadId: threadId)
+        messageView.clearBubble(threadId: threadId)
+        if messageView.hasVisibleMessages {
+            positionMessagePanel()
+        } else {
+            messagePanel.orderOut(nil)
+        }
     }
 
     private func cancelMessageWorkItems() {
@@ -509,6 +638,7 @@ private final class PetHostController {
         )
 
         window.setFrameOrigin(step.origin)
+        positionMessagePanel()
         glideVelocity = step.velocity
         if step.animation != glideAnimationFallback {
             glideAnimationFallback = step.animation
@@ -537,6 +667,12 @@ private final class PetHostController {
             return screen.visibleFrame
         }
         return window.frame
+    }
+
+    private func positionMessagePanel() {
+        guard messageView.hasVisibleMessages else { return }
+        let petAnchor = petAnchorInScreen()
+        messageView.resizeWindow(preservingPetAnchor: petAnchor)
     }
 
     private func directionalAnimation(from animation: PetAnimation?) -> PetAnimation {
@@ -669,14 +805,6 @@ private final class PetHostController {
         )
     }
 
-    private static func defaultWindowOrigin(contentSize: CGSize) -> CGPoint {
-        let screenFrame = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
-        return CGPoint(
-            x: screenFrame.maxX - contentSize.width - 40,
-            y: screenFrame.minY + 40
-        )
-    }
-
     private static func loadFrames(from petBundle: PetBundle) throws -> [PetAnimation: [CGImage]] {
         guard
             let source = CGImageSourceCreateWithURL(petBundle.spritesheetURL as CFURL, nil),
@@ -785,10 +913,15 @@ func openPetsBubbleIndicator(forStatusKind kind: String) -> PetBubbleIndicator {
 }
 
 @MainActor
-private final class PetHostView: NSView {
+final class PetHostView: NSView {
     var onClick: (() -> Void)? {
         get { spriteView.onClick }
         set { spriteView.onClick = newValue }
+    }
+
+    var onDragMove: ((CGPoint) -> Void)? {
+        get { spriteView.onDragMove }
+        set { spriteView.onDragMove = newValue }
     }
 
     var onDragDirectionChange: ((PetAnimation) -> Void)? {
@@ -806,15 +939,94 @@ private final class PetHostView: NSView {
         set { spriteView.onDragEnd = newValue }
     }
 
-    var onDismissMessage: ((String) -> Void)?
+    var onInteractionEnd: (() -> Void)? {
+        get { spriteView.onInteractionEnd }
+        set { spriteView.onInteractionEnd = newValue }
+    }
 
     var visibleSpriteFrame: CGRect {
-        spriteView.spriteFrame
+        bounds
+    }
+
+    var petAnchorFrame: CGRect {
+        bounds
     }
 
     private let spriteView: PetSpriteView
+    private let spriteSize: CGSize
+    private let stableSpriteBounds: CGRect
+
+    init(
+        spriteSize: CGSize,
+        stableSpriteBounds: CGRect,
+        frames: [PetAnimation: [CGImage]]
+    ) {
+        self.spriteSize = spriteSize
+        self.stableSpriteBounds = stableSpriteBounds
+        let size = CGSize(
+            width: max(1, stableSpriteBounds.width),
+            height: max(1, stableSpriteBounds.height)
+        )
+        spriteView = PetSpriteView(
+            frame: CGRect(origin: .zero, size: size),
+            spriteSize: spriteSize,
+            frames: frames
+        )
+        super.init(frame: CGRect(origin: .zero, size: size))
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        addSubview(spriteView)
+        applyCurrentLayoutToSubviews()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var isOpaque: Bool {
+        false
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hitView = super.hitTest(point)
+        return hitView === self ? nil : hitView
+    }
+
+    override func layout() {
+        super.layout()
+        applyCurrentLayoutToSubviews()
+    }
+
+    func set(animation: PetAnimation, frameIndex: Int) {
+        spriteView.set(animation: animation, frameIndex: frameIndex)
+    }
+
+    private func applyCurrentLayoutToSubviews() {
+        spriteView.frame = bounds
+        spriteView.spriteFrame = CGRect(
+            x: -stableSpriteBounds.minX,
+            y: -stableSpriteBounds.minY,
+            width: spriteSize.width,
+            height: spriteSize.height
+        )
+    }
+}
+
+@MainActor
+final class PetMessagePanelView: NSView {
+    var onDismissMessage: ((String) -> Void)?
+    var onLayoutChanged: (() -> Void)?
+
+    var hasVisibleMessages: Bool {
+        !messageStack.visibleMessages().isEmpty
+    }
+
+    var petAnchorFrame: CGRect {
+        currentMessageLayout.petFrame
+    }
+
     private lazy var bubbleView: MessageHostingView = {
-        let view = MessageHostingView(rootView: OpenPetsMessageView(
+        MessageHostingView(rootView: OpenPetsMessageView(
             messages: [],
             hiddenMessageCount: 0,
             isCollapsed: false,
@@ -824,11 +1036,9 @@ private final class PetHostView: NSView {
             onDismiss: { _ in },
             onToggle: {}
         ))
-        return view
     }()
-    private let spriteSize: CGSize
+    private let petSize: CGSize
     private let messageAreaHeight: CGFloat
-    private let compactSize: CGSize
     private var messageStack = PetMessageStack()
     private var isMessageStackCollapsed = false
     private var currentMessageLayout = OpenPetsMessageLayout.empty
@@ -839,20 +1049,12 @@ private final class PetHostView: NSView {
         case dismiss(String)
     }
 
-    init(
-        frame: CGRect,
-        spriteSize: CGSize,
-        messageAreaHeight: CGFloat,
-        frames: [PetAnimation: [CGImage]]
-    ) {
-        self.spriteSize = spriteSize
+    init(petSize: CGSize, messageAreaHeight: CGFloat) {
+        self.petSize = petSize
         self.messageAreaHeight = messageAreaHeight
-        compactSize = frame.size
-        spriteView = PetSpriteView(frame: frame, spriteSize: spriteSize, frames: frames)
-        super.init(frame: frame)
+        super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
-        addSubview(spriteView)
         bubbleView.wantsLayer = true
         bubbleView.layer?.backgroundColor = NSColor.clear.cgColor
         bubbleView.isHidden = true
@@ -871,7 +1073,8 @@ private final class PetHostView: NSView {
         if messageMouseTarget(at: point) != nil {
             return self
         }
-        return super.hitTest(point)
+        let hitView = super.hitTest(point)
+        return hitView === self ? nil : hitView
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -896,31 +1099,7 @@ private final class PetHostView: NSView {
 
     override func layout() {
         super.layout()
-        let visibleMessages = messageStack.visibleMessages()
-        guard !visibleMessages.isEmpty else {
-            spriteView.frame = bounds
-            spriteView.spriteFrame = defaultSpriteFrame(in: bounds)
-            bubbleView.frame = .zero
-            bubbleView.interactiveRects = []
-            bubbleView.dismissRegions = []
-            isMessageStackCollapsed = false
-            currentMessageLayout = .empty
-            return
-        }
-        currentMessageLayout = messageLayout(for: visibleMessages, containerSize: bounds.size)
-        spriteView.frame = bounds
-        spriteView.spriteFrame = currentMessageLayout.spriteFrame
         bubbleView.frame = bounds
-        updateMessageHitRegions(messages: visibleMessages, layout: currentMessageLayout)
-        updateMessageView(
-            messages: visibleMessages,
-            hiddenMessageCount: messageStack.hiddenMessageCount(),
-            layout: currentMessageLayout
-        )
-    }
-
-    func set(animation: PetAnimation, frameIndex: Int) {
-        spriteView.set(animation: animation, frameIndex: frameIndex)
     }
 
     func setBubble(_ bubble: PetBubble, threadId: String) {
@@ -936,77 +1115,53 @@ private final class PetHostView: NSView {
         relayoutMessages()
     }
 
-    private func relayoutMessages() {
-        let visibleMessages = messageStack.visibleMessages()
-        if !visibleMessages.isEmpty, !bounds.isEmpty {
-            let size = resizeWindowToPreferredSize(for: visibleMessages)
-            currentMessageLayout = messageLayout(for: visibleMessages, containerSize: size)
-            bubbleView.frame = CGRect(origin: .zero, size: size)
-        } else {
-            _ = resizeWindowToPreferredSize(for: [])
-            currentMessageLayout = .empty
-            bubbleView.frame = .zero
-            isMessageStackCollapsed = false
-        }
-        updateMessageHitRegions(messages: visibleMessages, layout: currentMessageLayout)
-        updateMessageView(
-            messages: visibleMessages,
-            hiddenMessageCount: messageStack.hiddenMessageCount(),
-            layout: currentMessageLayout
+    func resizeWindow(preservingPetAnchor petAnchor: CGPoint) {
+        guard let window, hasVisibleMessages else { return }
+        var frame = window.frame
+        frame.origin = PetWindowPositioning.windowOrigin(
+            preservingPetAnchor: petAnchor,
+            petFrame: currentMessageLayout.petFrame
         )
-        needsLayout = true
+        frame.size = currentMessageLayout.containerSize
+        window.setFrame(frame, display: false)
     }
 
-    private func messageLayout(for messages: [PetMessage], containerSize: CGSize) -> OpenPetsMessageLayout {
-        OpenPetsMessageLayout.make(
+    private func relayoutMessages() {
+        let messages = messageStack.visibleMessages()
+        if messages.isEmpty {
+            currentMessageLayout = .empty
+            bubbleView.frame = .zero
+            bubbleView.interactiveRects = []
+            bubbleView.dismissRegions = []
+            updateMessageView(messages: [], hiddenMessageCount: 0, layout: .empty)
+            setFrameSize(.zero)
+            onLayoutChanged?()
+            return
+        }
+
+        currentMessageLayout = OpenPetsMessageLayout.makeMessagePanel(
             messages: messages,
             hiddenMessageCount: messageStack.hiddenMessageCount(),
             isCollapsed: isMessageStackCollapsed,
-            containerWidth: containerSize.width,
-            spriteSize: spriteSize,
+            petSize: petSize,
             messageAreaHeight: messageAreaHeight
         )
-    }
-
-    private func preferredSize(for messages: [PetMessage]) -> CGSize {
-        guard !messages.isEmpty else {
-            return compactSize
-        }
-        return messageLayout(for: messages, containerSize: compactSize).containerSize
-    }
-
-    @discardableResult
-    private func resizeWindowToPreferredSize(for messages: [PetMessage]) -> CGSize {
-        let size = preferredSize(for: messages)
-        guard abs(size.width - bounds.width) > 0.5 || abs(size.height - bounds.height) > 0.5 else {
-            return size
-        }
-
-        if let window {
-            var frame = window.frame
-            frame.size = size
-            window.setFrame(frame, display: false)
-        } else {
-            setFrameSize(size)
-        }
-        return size
-    }
-
-    private func defaultSpriteFrame(in bounds: CGRect) -> CGRect {
-        CGRect(
-            x: bounds.width - spriteSize.width - OpenPetsMessageLayout.sideInset,
-            y: 0,
-            width: spriteSize.width,
-            height: spriteSize.height
+        setFrameSize(currentMessageLayout.containerSize)
+        bubbleView.frame = bounds
+        updateMessageHitRegions(messages: messages, layout: currentMessageLayout)
+        updateMessageView(
+            messages: messages,
+            hiddenMessageCount: messageStack.hiddenMessageCount(),
+            layout: currentMessageLayout
         )
+        onLayoutChanged?()
     }
 
     private func updateMessageView(
-        messages: [PetMessage] = [],
-        hiddenMessageCount: Int = 0,
-        layout: OpenPetsMessageLayout? = nil
+        messages: [PetMessage],
+        hiddenMessageCount: Int,
+        layout: OpenPetsMessageLayout
     ) {
-        let layout = layout ?? currentMessageLayout
         bubbleView.rootView = OpenPetsMessageView(
             messages: messages,
             hiddenMessageCount: hiddenMessageCount,
@@ -1071,12 +1226,14 @@ struct OpenPetsMessageLayout {
         containerSize: .zero,
         cardFrames: [],
         spriteFrame: .zero,
+        petFrame: .zero,
         toggleFrame: .zero
     )
 
     var containerSize: CGSize
     var cardFrames: [CGRect]
     var spriteFrame: CGRect
+    var petFrame: CGRect
     var toggleFrame: CGRect
 
     var cardFrame: CGRect {
@@ -1176,7 +1333,149 @@ struct OpenPetsMessageLayout {
             containerSize: CGSize(width: containerWidth, height: contentHeight),
             cardFrames: cardFrames,
             spriteFrame: spriteFrame,
+            petFrame: spriteFrame,
             toggleFrame: toggleFrame
+        )
+    }
+
+    @MainActor
+    static func makeMinimal(
+        messages: [PetMessage],
+        hiddenMessageCount: Int,
+        isCollapsed: Bool = false,
+        spriteSize: CGSize,
+        stableSpriteBounds: CGRect,
+        messageAreaHeight: CGFloat
+    ) -> OpenPetsMessageLayout {
+        _ = hiddenMessageCount
+        let petSize = CGSize(
+            width: max(1, stableSpriteBounds.width),
+            height: max(1, stableSpriteBounds.height)
+        )
+        let cardSizes = isCollapsed ? [] : messages.map {
+            OpenPetsBubbleContentView.size(
+                for: $0.bubble,
+                maxWidth: maxCardWidth,
+                messageAreaHeight: messageAreaHeight
+            )
+        }
+        let widestCard = cardSizes.map(\.width).max() ?? 0
+        let rightEdge = max(petSize.width, widestCard, messages.isEmpty ? 0 : toggleDiameter)
+        let petFrame = CGRect(
+            x: rightEdge - petSize.width,
+            y: 0,
+            width: petSize.width,
+            height: petSize.height
+        )
+        let spriteFrame = CGRect(
+            x: petFrame.minX - stableSpriteBounds.minX,
+            y: petFrame.minY - stableSpriteBounds.minY,
+            width: spriteSize.width,
+            height: spriteSize.height
+        )
+
+        var cardFrames: [CGRect] = []
+        var nextY = petFrame.maxY + verticalGap
+        for cardSize in cardSizes {
+            cardFrames.append(CGRect(
+                x: rightEdge - cardSize.width,
+                y: nextY,
+                width: cardSize.width,
+                height: cardSize.height
+            ))
+            nextY += cardSize.height + stackGap
+        }
+
+        let toggleFrame: CGRect
+        if messages.isEmpty {
+            toggleFrame = .zero
+        } else {
+            let bottomCardMinY = cardFrames.first?.minY ?? petFrame.maxY + verticalGap
+            toggleFrame = CGRect(
+                x: rightEdge - toggleDiameter,
+                y: bottomCardMinY - toggleDiameter - toggleGapBelowCard,
+                width: toggleDiameter,
+                height: toggleDiameter
+            )
+        }
+
+        let occupiedFrames = [petFrame] + cardFrames + (toggleFrame.isEmpty ? [] : [toggleFrame])
+        let contentBounds = occupiedFrames.reduce(CGRect.null) { partialResult, frame in
+            partialResult.union(frame)
+        }
+        let offset = CGVector(dx: -contentBounds.minX, dy: -contentBounds.minY)
+        let normalizedCardFrames = cardFrames.map { $0.offsetBy(dx: offset.dx, dy: offset.dy) }
+
+        return OpenPetsMessageLayout(
+            containerSize: contentBounds.size,
+            cardFrames: normalizedCardFrames,
+            spriteFrame: spriteFrame.offsetBy(dx: offset.dx, dy: offset.dy),
+            petFrame: petFrame.offsetBy(dx: offset.dx, dy: offset.dy),
+            toggleFrame: toggleFrame.isEmpty ? .zero : toggleFrame.offsetBy(dx: offset.dx, dy: offset.dy)
+        )
+    }
+
+    @MainActor
+    static func makeMessagePanel(
+        messages: [PetMessage],
+        hiddenMessageCount: Int,
+        isCollapsed: Bool = false,
+        petSize: CGSize,
+        messageAreaHeight: CGFloat
+    ) -> OpenPetsMessageLayout {
+        _ = hiddenMessageCount
+        guard !messages.isEmpty else { return .empty }
+
+        let cardSizes = isCollapsed ? [] : messages.map {
+            OpenPetsBubbleContentView.size(
+                for: $0.bubble,
+                maxWidth: maxCardWidth,
+                messageAreaHeight: messageAreaHeight
+            )
+        }
+        let widestCard = cardSizes.map(\.width).max() ?? 0
+        let rightEdge = max(petSize.width, widestCard, toggleDiameter)
+        let petFrame = CGRect(
+            x: rightEdge - petSize.width,
+            y: 0,
+            width: max(1, petSize.width),
+            height: max(1, petSize.height)
+        )
+
+        var cardFrames: [CGRect] = []
+        var nextY = petFrame.maxY + verticalGap
+        for cardSize in cardSizes {
+            cardFrames.append(CGRect(
+                x: rightEdge - cardSize.width,
+                y: nextY,
+                width: cardSize.width,
+                height: cardSize.height
+            ))
+            nextY += cardSize.height + stackGap
+        }
+
+        let toggleFrame = CGRect(
+            x: rightEdge - toggleDiameter,
+            y: petFrame.maxY + verticalGap,
+            width: toggleDiameter,
+            height: toggleDiameter
+        )
+        for index in cardFrames.indices {
+            cardFrames[index].origin.y += toggleDiameter + toggleGapBelowCard
+        }
+        let messageFrames = cardFrames + [toggleFrame]
+        let messageBounds = messageFrames.reduce(CGRect.null) { partialResult, frame in
+            partialResult.union(frame)
+        }
+        let offset = CGVector(dx: -messageBounds.minX, dy: -messageBounds.minY)
+        let normalizedCardFrames = cardFrames.map { $0.offsetBy(dx: offset.dx, dy: offset.dy) }
+
+        return OpenPetsMessageLayout(
+            containerSize: messageBounds.size,
+            cardFrames: normalizedCardFrames,
+            spriteFrame: .zero,
+            petFrame: petFrame.offsetBy(dx: offset.dx, dy: offset.dy),
+            toggleFrame: toggleFrame.offsetBy(dx: offset.dx, dy: offset.dy)
         )
     }
 
@@ -1539,25 +1838,147 @@ private struct WorkingProgressRing: View {
     }
 }
 
-@MainActor
-private final class PetSpriteView: NSView {
-    var onClick: (() -> Void)?
-    var onDragStart: (() -> Void)?
-    var onDragDirectionChange: ((PetAnimation) -> Void)?
-    var onDragEnd: ((CGVector, PetAnimation?) -> Void)?
-    var spriteFrame: CGRect {
-        didSet {
-            needsDisplay = true
+struct PetSpriteVisibility {
+    private let width: Int
+    private let height: Int
+    private let alphas: [UInt8]
+
+    init?(image: CGImage) {
+        let imageWidth = image.width
+        let imageHeight = image.height
+        guard imageWidth > 0, imageHeight > 0, imageWidth <= Int.max / imageHeight / 4 else { return nil }
+
+        let bytesPerPixel = 4
+        let bytesPerRow = imageWidth * bytesPerPixel
+        var rgba = [UInt8](repeating: 0, count: bytesPerRow * imageHeight)
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+            | CGBitmapInfo.byteOrder32Big.rawValue
+
+        guard let renderedAlphas = rgba.withUnsafeMutableBytes({ buffer -> [UInt8]? in
+            guard
+                let context = CGContext(
+                    data: buffer.baseAddress,
+                    width: imageWidth,
+                    height: imageHeight,
+                    bitsPerComponent: 8,
+                    bytesPerRow: bytesPerRow,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: bitmapInfo
+                )
+            else {
+                return nil
+            }
+
+            context.interpolationQuality = .none
+            context.draw(image, in: CGRect(x: 0, y: 0, width: imageWidth, height: imageHeight))
+
+            let bytes = buffer.bindMemory(to: UInt8.self)
+            var alphas = [UInt8](repeating: 0, count: imageWidth * imageHeight)
+            for index in 0..<alphas.count {
+                alphas[index] = bytes[index * bytesPerPixel + 3]
+            }
+            return alphas
+        }) else {
+            return nil
+        }
+
+        width = imageWidth
+        height = imageHeight
+        alphas = renderedAlphas
+    }
+
+    func visibleBounds(in frame: CGRect) -> CGRect? {
+        var minX = width
+        var minY = height
+        var maxX = -1
+        var maxY = -1
+
+        for pixelY in 0..<height {
+            for pixelX in 0..<width where alphas[pixelY * width + pixelX] > 0 {
+                minX = min(minX, pixelX)
+                minY = min(minY, pixelY)
+                maxX = max(maxX, pixelX)
+                maxY = max(maxY, pixelY)
+            }
+        }
+
+        guard maxX >= minX, maxY >= minY else { return nil }
+
+        let scaleX = frame.width / CGFloat(width)
+        let scaleY = frame.height / CGFloat(height)
+        return CGRect(
+            x: frame.minX + CGFloat(minX) * scaleX,
+            y: frame.minY + CGFloat(minY) * scaleY,
+            width: CGFloat(maxX - minX + 1) * scaleX,
+            height: CGFloat(maxY - minY + 1) * scaleY
+        )
+    }
+
+    static func stableVisibleBounds(in frames: [PetAnimation: [CGImage]], spriteSize: CGSize) -> CGRect {
+        let fullSpriteBounds = CGRect(origin: .zero, size: spriteSize)
+        let images = frames.values.flatMap { $0 }
+        var stableBounds = CGRect.null
+        for image in images {
+            guard let mask = PetSpriteVisibility(image: image) else {
+                return fullSpriteBounds
+            }
+            guard let visibleBounds = mask.visibleBounds(in: fullSpriteBounds) else {
+                continue
+            }
+            stableBounds = stableBounds.union(visibleBounds)
+        }
+
+        guard !stableBounds.isNull else {
+            return fullSpriteBounds
+        }
+
+        return stableBounds
+    }
+}
+
+final class PetSpriteFrameAsset {
+    let image: CGImage
+    let renderedImage: NSImage
+
+    init(image: CGImage, spriteSize: CGSize) {
+        self.image = image
+        renderedImage = NSImage(cgImage: image, size: spriteSize)
+    }
+}
+
+final class PetSpriteFrameStore {
+    private let assetsByAnimation: [PetAnimation: [PetSpriteFrameAsset]]
+
+    init(frames: [PetAnimation: [CGImage]], spriteSize: CGSize) {
+        assetsByAnimation = frames.mapValues { images in
+            images.map { PetSpriteFrameAsset(image: $0, spriteSize: spriteSize) }
         }
     }
 
-    private let spriteSize: CGSize
-    private let frames: [PetAnimation: [CGImage]]
-    private var currentFrame: CGImage?
+    func asset(for animation: PetAnimation, frameIndex: Int) -> PetSpriteFrameAsset? {
+        guard let assets = assetsByAnimation[animation], !assets.isEmpty else { return nil }
+        return assets[frameIndex % assets.count]
+    }
+}
+
+struct PetDragUpdate: Equatable {
+    var windowOrigin: CGPoint
+    var isDragging: Bool
+    var directionChange: PetAnimation?
+}
+
+struct PetDragEnd: Equatable {
+    var wasDragging: Bool
+    var releaseVelocity: CGVector
+    var fallbackAnimation: PetAnimation?
+}
+
+struct PetDragTracker {
     private var mouseDownScreenLocation = CGPoint.zero
     private var previousDragScreenLocation = CGPoint.zero
     private var mouseDownWindowOrigin = CGPoint.zero
     private var dragging = false
+    private var active = false
     private var lastDragAnimation: PetAnimation?
     private var dragSamples: [DragSample] = []
 
@@ -1566,109 +1987,101 @@ private final class PetSpriteView: NSView {
         var timestamp: TimeInterval
     }
 
+    private static let dragStartDistance: CGFloat = 4
+    private static let dragDirectionThreshold: CGFloat = 0.5
     private static let dragVelocitySampleWindow: TimeInterval = 0.12
     private static let maximumDragVelocitySamples = 8
 
-    init(
-        frame: CGRect,
-        spriteSize: CGSize,
-        frames: [PetAnimation: [CGImage]]
-    ) {
-        self.spriteSize = spriteSize
-        self.frames = frames
-        spriteFrame = CGRect(
-            x: frame.width - spriteSize.width - OpenPetsMessageLayout.sideInset,
-            y: 0,
-            width: spriteSize.width,
-            height: spriteSize.height
-        )
-        currentFrame = frames[.idle]?.first
-        super.init(frame: frame)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
+    var isDragging: Bool {
+        dragging
     }
 
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override var isOpaque: Bool {
-        false
-    }
-
-    func set(animation: PetAnimation, frameIndex: Int) {
-        guard let animationFrames = frames[animation], !animationFrames.isEmpty else { return }
-        currentFrame = animationFrames[frameIndex % animationFrames.count]
-        needsDisplay = true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.clear.setFill()
-        dirtyRect.fill()
-
-        guard let currentFrame else { return }
-        NSGraphicsContext.current?.imageInterpolation = .none
-        NSImage(cgImage: currentFrame, size: spriteSize).draw(in: spriteFrame)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        onDragStart?()
-        mouseDownScreenLocation = NSEvent.mouseLocation
-        previousDragScreenLocation = mouseDownScreenLocation
-        mouseDownWindowOrigin = window?.frame.origin ?? .zero
+    mutating func start(screenLocation: CGPoint, windowOrigin: CGPoint, timestamp: TimeInterval) {
+        active = true
+        mouseDownScreenLocation = screenLocation
+        previousDragScreenLocation = screenLocation
+        mouseDownWindowOrigin = windowOrigin
         dragging = false
         lastDragAnimation = nil
-        dragSamples = [DragSample(location: mouseDownScreenLocation, timestamp: event.timestamp)]
+        dragSamples = [DragSample(location: screenLocation, timestamp: timestamp)]
     }
 
-    override func mouseDragged(with event: NSEvent) {
-        guard let window else { return }
-        let currentLocation = NSEvent.mouseLocation
-        appendDragSample(location: currentLocation, timestamp: event.timestamp)
+    mutating func drag(to screenLocation: CGPoint, timestamp: TimeInterval) -> PetDragUpdate? {
+        guard active else { return nil }
+        appendDragSample(location: screenLocation, timestamp: timestamp)
         let delta = CGPoint(
-            x: currentLocation.x - mouseDownScreenLocation.x,
-            y: currentLocation.y - mouseDownScreenLocation.y
+            x: screenLocation.x - mouseDownScreenLocation.x,
+            y: screenLocation.y - mouseDownScreenLocation.y
         )
 
-        if !dragging, hypot(delta.x, delta.y) > 4 {
+        if !dragging, hypot(delta.x, delta.y) > PetDragTracker.dragStartDistance {
             dragging = true
         }
 
-        window.setFrameOrigin(CGPoint(
-            x: mouseDownWindowOrigin.x + delta.x,
-            y: mouseDownWindowOrigin.y + delta.y
-        ))
+        let windowOrigin = dragging
+            ? CGPoint(
+                x: mouseDownWindowOrigin.x + delta.x,
+                y: mouseDownWindowOrigin.y + delta.y
+            )
+            : mouseDownWindowOrigin
 
-        let incrementalX = currentLocation.x - previousDragScreenLocation.x
-        previousDragScreenLocation = currentLocation
+        let incrementalX = screenLocation.x - previousDragScreenLocation.x
+        previousDragScreenLocation = screenLocation
 
-        guard abs(incrementalX) > 0.5 else { return }
-        let animation: PetAnimation = incrementalX >= 0 ? .runningRight : .runningLeft
-        if animation != lastDragAnimation {
-            lastDragAnimation = animation
-            onDragDirectionChange?(animation)
+        let directionChange: PetAnimation?
+        if abs(incrementalX) > PetDragTracker.dragDirectionThreshold {
+            let animation: PetAnimation = incrementalX >= 0 ? .runningRight : .runningLeft
+            if animation != lastDragAnimation {
+                lastDragAnimation = animation
+                directionChange = animation
+            } else {
+                directionChange = nil
+            }
+        } else {
+            directionChange = nil
         }
+
+        return PetDragUpdate(
+            windowOrigin: windowOrigin,
+            isDragging: dragging,
+            directionChange: directionChange
+        )
     }
 
-    override func mouseUp(with event: NSEvent) {
-        if dragging {
-            appendDragSample(location: NSEvent.mouseLocation, timestamp: event.timestamp)
-            onDragEnd?(releaseVelocity(), lastDragAnimation)
-        } else {
-            onClick?()
+    mutating func end(at screenLocation: CGPoint, timestamp: TimeInterval) -> PetDragEnd {
+        guard active else {
+            return PetDragEnd(wasDragging: false, releaseVelocity: .zero, fallbackAnimation: nil)
         }
+
+        if dragging {
+            appendDragSample(location: screenLocation, timestamp: timestamp)
+        }
+
+        let result = PetDragEnd(
+            wasDragging: dragging,
+            releaseVelocity: dragging ? releaseVelocity() : .zero,
+            fallbackAnimation: lastDragAnimation
+        )
+        reset()
+        return result
+    }
+
+    private mutating func reset() {
+        active = false
+        dragging = false
+        lastDragAnimation = nil
         dragSamples.removeAll(keepingCapacity: true)
     }
 
-    private func appendDragSample(location: CGPoint, timestamp: TimeInterval) {
+    private mutating func appendDragSample(location: CGPoint, timestamp: TimeInterval) {
         dragSamples.append(DragSample(location: location, timestamp: timestamp))
-        let minimumTimestamp = timestamp - PetSpriteView.dragVelocitySampleWindow
+        let minimumTimestamp = timestamp - PetDragTracker.dragVelocitySampleWindow
         dragSamples.removeAll { sample in
             sample.timestamp < minimumTimestamp
         }
 
-        if dragSamples.count > PetSpriteView.maximumDragVelocitySamples {
-            dragSamples.removeFirst(dragSamples.count - PetSpriteView.maximumDragVelocitySamples)
+        if dragSamples.count > PetDragTracker.maximumDragVelocitySamples {
+            dragSamples.removeFirst(dragSamples.count - PetDragTracker.maximumDragVelocitySamples)
         }
     }
 
@@ -1686,6 +2099,107 @@ private final class PetSpriteView: NSView {
             dx: (last.location.x - first.location.x) / elapsed,
             dy: (last.location.y - first.location.y) / elapsed
         )
+    }
+}
+
+@MainActor
+private final class PetSpriteView: NSView {
+    var onClick: (() -> Void)?
+    var onDragStart: (() -> Void)?
+    var onDragMove: ((CGPoint) -> Void)?
+    var onDragDirectionChange: ((PetAnimation) -> Void)?
+    var onDragEnd: ((CGVector, PetAnimation?) -> Void)?
+    var onInteractionEnd: (() -> Void)?
+    var spriteFrame: CGRect {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
+    private let spriteSize: CGSize
+    private let frameStore: PetSpriteFrameStore
+    private var currentFrameAsset: PetSpriteFrameAsset?
+    private var dragTracker = PetDragTracker()
+
+    init(
+        frame: CGRect,
+        spriteSize: CGSize,
+        frames: [PetAnimation: [CGImage]]
+    ) {
+        self.spriteSize = spriteSize
+        frameStore = PetSpriteFrameStore(frames: frames, spriteSize: spriteSize)
+        let initialAsset = frameStore.asset(for: .idle, frameIndex: 0)
+        spriteFrame = CGRect(
+            x: frame.width - spriteSize.width - OpenPetsMessageLayout.sideInset,
+            y: 0,
+            width: spriteSize.width,
+            height: spriteSize.height
+        )
+        currentFrameAsset = initialAsset
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var isOpaque: Bool {
+        false
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard spriteFrame.contains(point), currentFrameAsset != nil else { return nil }
+        return self
+    }
+
+    func set(animation: PetAnimation, frameIndex: Int) {
+        guard let asset = frameStore.asset(for: animation, frameIndex: frameIndex) else { return }
+        currentFrameAsset = asset
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.clear.setFill()
+        dirtyRect.fill()
+
+        guard let currentFrameAsset else { return }
+        NSGraphicsContext.current?.imageInterpolation = .none
+        currentFrameAsset.renderedImage.draw(in: spriteFrame)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onDragStart?()
+        dragTracker.start(
+            screenLocation: NSEvent.mouseLocation,
+            windowOrigin: window?.frame.origin ?? .zero,
+            timestamp: event.timestamp
+        )
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard
+            let window,
+            let update = dragTracker.drag(to: NSEvent.mouseLocation, timestamp: event.timestamp)
+        else {
+            return
+        }
+        window.setFrameOrigin(update.windowOrigin)
+        onDragMove?(update.windowOrigin)
+        if let directionChange = update.directionChange {
+            onDragDirectionChange?(directionChange)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let result = dragTracker.end(at: NSEvent.mouseLocation, timestamp: event.timestamp)
+        if result.wasDragging {
+            onDragEnd?(result.releaseVelocity, result.fallbackAnimation)
+        } else {
+            onClick?()
+        }
+        onInteractionEnd?()
     }
 
 }
