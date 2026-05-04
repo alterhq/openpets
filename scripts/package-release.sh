@@ -153,6 +153,8 @@ cp -R "$ARM64_RELEASE_DIR/Sparkle.framework" "$APP_BUNDLE/Contents/Frameworks/"
 if [[ -d "$ARM64_RELEASE_DIR/OpenPets_OpenPetsCore.bundle" ]]; then
   cp -R "$ARM64_RELEASE_DIR/OpenPets_OpenPetsCore.bundle" "$APP_BUNDLE/Contents/Resources/"
 fi
+test -f "$APP_BUNDLE/Contents/Resources/OpenPets_OpenPetsCore.bundle/pet.json"
+test -f "$APP_BUNDLE/Contents/Resources/OpenPets_OpenPetsCore.bundle/spritesheet.webp"
 
 if [[ -n "$IDENTITY" ]]; then
   SPARKLE_FRAMEWORK="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
