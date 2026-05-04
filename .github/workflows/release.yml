@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, with or without a leading v"
+        required: true
+      build_number:
+        description: "CFBundleVersion build number"
+        required: false
+      release_notes:
+        description: "Markdown release notes for Sparkle"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        env:
+          INPUT_BUILD_NUMBER: ${{ github.event.inputs.build_number }}
+          INPUT_RELEASE_NOTES: ${{ github.event.inputs.release_notes }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          RAW_VERSION="$INPUT_VERSION"
+          if [[ -z "$RAW_VERSION" ]]; then
+            RAW_VERSION="$GITHUB_REF_NAME"
+          fi
+
+          VERSION="${RAW_VERSION#v}"
+          RELEASE_TAG="$RAW_VERSION"
+          if [[ "$RELEASE_TAG" != v* ]]; then
+            RELEASE_TAG="v$RELEASE_TAG"
+          fi
+
+          BUILD_NUMBER="$INPUT_BUILD_NUMBER"
+          if [[ -z "$BUILD_NUMBER" ]]; then
+            BUILD_NUMBER="$GITHUB_RUN_NUMBER"
+          fi
+
+          {
+            echo "OPENPETS_VERSION=$VERSION"
+            echo "OPENPETS_BUILD_NUMBER=$BUILD_NUMBER"
+            echo "OPENPETS_RELEASE_TAG=$RELEASE_TAG"
+            echo "OPENPETS_RELEASE_DOWNLOAD_URL_PREFIX=https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/"
+          } >> "$GITHUB_ENV"
+
+          {
+            echo "OPENPETS_RELEASE_NOTES<<EOF"
+            if [[ -n "$INPUT_RELEASE_NOTES" ]]; then
+              printf '%s\n' "$INPUT_RELEASE_NOTES"
+            else
+              printf 'OpenPets %s\n' "$VERSION"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Install the Apple certificate
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/build_certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" \
+            -P "$P12_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+      - name: Test
+        run: swift test
+
+      - name: Package universal release
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+          NOTARIZATION_PASSWORD: ${{ secrets.NOTARIZATION_PASSWORD }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+        run: scripts/package-release.sh
+
+      - name: Verify universal binaries
+        run: |
+          APP_PATH=".build/release-package/OpenPets.app"
+          test "$(lipo -archs "$APP_PATH/Contents/MacOS/OpenPets")" = "x86_64 arm64"
+          test "$(lipo -archs "$APP_PATH/Contents/MacOS/openpets")" = "x86_64 arm64"
+
+      - name: Verify signatures and notarization
+        run: |
+          codesign --verify --strict --verbose=4 ".build/release-package/OpenPets.app"
+          codesign --verify --strict --verbose=4 ".build/release-artifacts/OpenPets-${OPENPETS_VERSION}.dmg"
+          xcrun stapler validate ".build/release-package/OpenPets.app"
+          xcrun stapler validate ".build/release-artifacts/OpenPets-${OPENPETS_VERSION}.dmg"
+
+      - name: Verify Sparkle appcast
+        run: |
+          test -f ".build/release-artifacts/appcast.xml"
+          ! grep -q "REPLACE_WITH_SPARKLE_EDDSA_PUBLIC_KEY" ".build/release-package/OpenPets.app/Contents/Info.plist"
+          grep -q "github.com/${GITHUB_REPOSITORY}/releases/download/${OPENPETS_RELEASE_TAG}" ".build/release-artifacts/appcast.xml"
+          grep -q "sparkle:edSignature" ".build/release-artifacts/appcast.xml"
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.OPENPETS_RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          files: |
+            .build/release-artifacts/OpenPets-${{ env.OPENPETS_VERSION }}.dmg
+            .build/release-artifacts/OpenPets-${{ env.OPENPETS_VERSION }}.dmg.sha256
+            .build/release-artifacts/OpenPets-${{ env.OPENPETS_VERSION }}.zip
+            .build/release-artifacts/OpenPets-${{ env.OPENPETS_VERSION }}.zip.sha256
+            .build/release-artifacts/appcast.xml

@@ -38,8 +38,8 @@
   <key>SUEnableInstallerLauncherService</key>
   <true/>
   <key>SUFeedURL</key>
-  <string>https://openpets.sh/appcast.xml</string>
+  <string>https://github.com/alterhq/openpets/releases/latest/download/appcast.xml</string>
   <key>SUPublicEDKey</key>
-  <string>REPLACE_WITH_SPARKLE_EDDSA_PUBLIC_KEY</string>
+  <string>C8g5L2GI3Ueijbs8igHe9EjxlU/mrXALibJobED8ARQ=</string>
 </dict>
 </plist>
