@@ -39,6 +39,10 @@ public struct OpenPetsClient: Sendable {
         }
         return try JSONDecoder().decode(PetResponse.self, from: responseData)
     }
+
+    public func isPetRunning() -> Bool {
+        (try? send(.ping).ok) == true
+    }
 }
 
 public final class OpenPetsServer: @unchecked Sendable {
@@ -50,6 +54,7 @@ public final class OpenPetsServer: @unchecked Sendable {
     private let stateLock = NSLock()
     private var listenFD: Int32 = -1
     private var running = false
+    private var ownsSocketPath = false
 
     public init(socketPath: String = OpenPetsPaths.defaultSocketPath, handler: @escaping Handler) {
         self.socketPath = socketPath
@@ -66,47 +71,102 @@ public final class OpenPetsServer: @unchecked Sendable {
         defer { stateLock.unlock() }
 
         guard !running else { return }
-        try? FileManager.default.removeItem(atPath: socketPath)
+        try prepareSocketPathForBinding()
 
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw OpenPetsError.socketFailure("Could not create Unix socket: \(OpenPetsIPC.lastError())")
         }
 
+        var didBindSocketPath = false
         do {
             try OpenPetsIPC.withSocketAddress(path: socketPath) { address, length in
                 guard Darwin.bind(fd, address, length) == 0 else {
                     throw OpenPetsError.socketFailure("Could not bind \(socketPath): \(OpenPetsIPC.lastError())")
                 }
             }
+            didBindSocketPath = true
 
             guard Darwin.listen(fd, SOMAXCONN) == 0 else {
                 throw OpenPetsError.socketFailure("Could not listen on \(socketPath): \(OpenPetsIPC.lastError())")
             }
         } catch {
             Darwin.close(fd)
+            if didBindSocketPath {
+                try? FileManager.default.removeItem(atPath: socketPath)
+            }
             throw error
         }
 
         listenFD = fd
         running = true
+        ownsSocketPath = true
         queue.async { [self] in
             acceptLoop(fileDescriptor: fd)
+        }
+    }
+
+    private func prepareSocketPathForBinding() throws {
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            return
+        }
+
+        var status = stat()
+        guard Darwin.lstat(socketPath, &status) == 0 else {
+            if errno == ENOENT {
+                return
+            }
+            throw OpenPetsError.socketFailure("Could not inspect \(socketPath): \(OpenPetsIPC.lastError())")
+        }
+
+        guard status.st_mode & S_IFMT == S_IFSOCK else {
+            throw OpenPetsError.socketFailure("Socket path exists and is not a Unix socket: \(socketPath)")
+        }
+
+        if try OpenPetsServer.socketHasListener(at: socketPath) {
+            throw OpenPetsError.socketAlreadyInUse(socketPath)
+        }
+
+        try FileManager.default.removeItem(atPath: socketPath)
+    }
+
+    private static func socketHasListener(at path: String) throws -> Bool {
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw OpenPetsError.socketFailure("Could not create Unix socket: \(OpenPetsIPC.lastError())")
+        }
+        defer { Darwin.close(fd) }
+
+        return try OpenPetsIPC.withSocketAddress(path: path) { address, length in
+            if Darwin.connect(fd, address, length) == 0 {
+                return true
+            }
+
+            switch errno {
+            case ECONNREFUSED, ENOENT:
+                return false
+            default:
+                throw OpenPetsError.socketFailure("Could not connect to \(path): \(OpenPetsIPC.lastError())")
+            }
         }
     }
 
     public func stop() {
         stateLock.lock()
         let fd = listenFD
+        let shouldRemoveSocketPath = ownsSocketPath
         running = false
         listenFD = -1
+        ownsSocketPath = false
         stateLock.unlock()
 
         if fd >= 0 {
             Darwin.shutdown(fd, SHUT_RDWR)
             Darwin.close(fd)
         }
-        try? FileManager.default.removeItem(atPath: socketPath)
+        if shouldRemoveSocketPath {
+            try? FileManager.default.removeItem(atPath: socketPath)
+        }
     }
 
     private func isRunning() -> Bool {

@@ -8,6 +8,7 @@ public enum OpenPetsError: Error, LocalizedError, Equatable, Sendable {
     case invalidSpritesheet(URL)
     case invalidAtlasDimensions(width: Int, height: Int)
     case invalidSocketPath(String)
+    case socketAlreadyInUse(String)
     case socketFailure(String)
     case protocolFailure(String)
 
@@ -23,6 +24,8 @@ public enum OpenPetsError: Error, LocalizedError, Equatable, Sendable {
             "Spritesheet dimensions \(width)x\(height) are not divisible into an 8x9 Codex pet atlas"
         case .invalidSocketPath(let path):
             "Unix socket path is too long or invalid: \(path)"
+        case .socketAlreadyInUse(let path):
+            "A pet host is already running on \(path)"
         case .socketFailure(let message):
             message
         case .protocolFailure(let message):

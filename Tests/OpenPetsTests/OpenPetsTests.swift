@@ -799,6 +799,63 @@ final class OpenPetsTests: XCTestCase {
         )
     }
 
+    func testOpenPetsClientReportsRunningPet() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openpets-\(UUID().uuidString).sock")
+            .path
+        let client = OpenPetsClient(socketPath: socketPath)
+        XCTAssertFalse(client.isPetRunning())
+
+        let server = OpenPetsServer(socketPath: socketPath) { command in
+            switch command {
+            case .ping:
+                PetResponse(ok: true, message: "pong")
+            default:
+                PetResponse(ok: false, message: "unexpected")
+            }
+        }
+        try server.start()
+        defer { server.stop() }
+
+        XCTAssertTrue(client.isPetRunning())
+    }
+
+    func testOpenPetsServerDoesNotReplaceLiveSocket() throws {
+        let socketPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openpets-\(UUID().uuidString).sock")
+            .path
+        let firstServer = OpenPetsServer(socketPath: socketPath) { command in
+            switch command {
+            case .ping:
+                PetResponse(ok: true, message: "first")
+            default:
+                PetResponse(ok: false, message: "unexpected")
+            }
+        }
+        try firstServer.start()
+        defer { firstServer.stop() }
+
+        do {
+            let secondServer = OpenPetsServer(socketPath: socketPath) { command in
+                switch command {
+                case .ping:
+                    PetResponse(ok: true, message: "second")
+                default:
+                    PetResponse(ok: false, message: "unexpected")
+                }
+            }
+
+            XCTAssertThrowsError(try secondServer.start()) { error in
+                XCTAssertEqual(error as? OpenPetsError, .socketAlreadyInUse(socketPath))
+            }
+            secondServer.stop()
+        }
+        XCTAssertEqual(
+            try OpenPetsClient(socketPath: socketPath).send(.ping),
+            PetResponse(ok: true, message: "first")
+        )
+    }
+
     func testPositionStorePersistsPerPet() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

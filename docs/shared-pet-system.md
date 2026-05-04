@@ -23,7 +23,7 @@ CLI client commands and Swift apps
 
 MCP clients do not connect to the Unix socket directly. They connect to the local HTTP MCP endpoint, and the MCP server forwards commands to the pet session it manages. That same pet session also listens on the configured Unix socket for CLI client commands and direct Swift clients.
 
-The `openpets run` command is different: it starts a pet host. Use it when you intentionally want to run a pet host yourself. If you run a second host on the same socket path as the menu bar app, later socket clients can be redirected to that host.
+The `openpets run` command is different: it starts a pet host. Use it when you intentionally want to run a pet host yourself. If another host is already listening on the same socket path, startup fails instead of replacing the existing pet.
 
 ## Shared Defaults
 
@@ -74,6 +74,17 @@ let configuration = try OpenPetsConfiguration.loadOrCreateDefault()
 let client = OpenPetsClient(socketPath: configuration.socketPath)
 ```
 
+Check whether the shared pet is already running before deciding to start your own host:
+
+```swift
+let client = OpenPetsClient()
+if client.isPetRunning() {
+    try client.send(.playAnimation(name: .waving))
+} else {
+    // Start or prompt for the user's preferred OpenPets host.
+}
+```
+
 Then reuse the returned `threadId` when updating the same operation:
 
 ```swift
@@ -122,7 +133,7 @@ Swift example:
 let client = OpenPetsClient(socketPath: "/tmp/openpets-dev.sock")
 ```
 
-If one process starts a pet host on the default socket and another process starts a different host on a custom socket, those are separate pets. Notifications sent to one socket will not appear on the other pet.
+If one process starts a pet host on the default socket and another process starts a different host on a custom socket, those are separate pets. Notifications sent to one socket will not appear on the other pet. Starting two hosts on the same socket is blocked; use a custom socket only when you intentionally want a second pet.
 
 ## MCP Integration Notes
 
