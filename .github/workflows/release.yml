@@ -111,6 +111,8 @@ jobs:
           test "$(lipo -archs "$APP_PATH/Contents/MacOS/openpets-cli")" = "x86_64 arm64"
           otool -L "$APP_PATH/Contents/MacOS/$BUNDLE_EXECUTABLE" | grep -q "Sparkle.framework"
           ! otool -L "$APP_PATH/Contents/MacOS/openpets-cli" | grep -q "Sparkle.framework"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP_PATH/Contents/Info.plist")" = "AppIcon"
+          test -f "$APP_PATH/Contents/Resources/AppIcon.icns"
           test -f "$APP_PATH/Contents/Resources/OpenPets_OpenPetsCore.bundle/pet.json"
           test -f "$APP_PATH/Contents/Resources/OpenPets_OpenPetsCore.bundle/spritesheet.webp"
 

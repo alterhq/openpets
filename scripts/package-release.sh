@@ -129,6 +129,9 @@ if otool -L "$BUNDLED_CLI_EXECUTABLE" | grep -q "Sparkle.framework"; then
 fi
 
 cp "$ROOT/Packaging/OpenPets.app/Contents/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
+if [[ -d "$ROOT/Packaging/OpenPets.app/Contents/Resources" ]]; then
+  cp -R "$ROOT/Packaging/OpenPets.app/Contents/Resources/." "$APP_BUNDLE/Contents/Resources/"
+fi
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :SUFeedURL $SPARKLE_FEED_URL" "$APP_BUNDLE/Contents/Info.plist"
@@ -153,6 +156,7 @@ cp -R "$ARM64_RELEASE_DIR/Sparkle.framework" "$APP_BUNDLE/Contents/Frameworks/"
 if [[ -d "$ARM64_RELEASE_DIR/OpenPets_OpenPetsCore.bundle" ]]; then
   cp -R "$ARM64_RELEASE_DIR/OpenPets_OpenPetsCore.bundle" "$APP_BUNDLE/Contents/Resources/"
 fi
+test -f "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 test -f "$APP_BUNDLE/Contents/Resources/OpenPets_OpenPetsCore.bundle/pet.json"
 test -f "$APP_BUNDLE/Contents/Resources/OpenPets_OpenPetsCore.bundle/spritesheet.webp"
 
