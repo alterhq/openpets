@@ -104,12 +104,18 @@ jobs:
       - name: Verify universal binaries
         run: |
           APP_PATH=".build/release-package/OpenPets.app"
-          test "$(lipo -archs "$APP_PATH/Contents/MacOS/OpenPets")" = "x86_64 arm64"
-          test "$(lipo -archs "$APP_PATH/Contents/MacOS/openpets")" = "x86_64 arm64"
+          BUNDLE_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Contents/Info.plist")"
+          test "$BUNDLE_EXECUTABLE" = "OpenPets"
+          test "$(stat -f '%i' "$APP_PATH/Contents/MacOS/$BUNDLE_EXECUTABLE")" != "$(stat -f '%i' "$APP_PATH/Contents/MacOS/openpets-cli")"
+          test "$(lipo -archs "$APP_PATH/Contents/MacOS/$BUNDLE_EXECUTABLE")" = "x86_64 arm64"
+          test "$(lipo -archs "$APP_PATH/Contents/MacOS/openpets-cli")" = "x86_64 arm64"
+          otool -L "$APP_PATH/Contents/MacOS/$BUNDLE_EXECUTABLE" | grep -q "Sparkle.framework"
+          ! otool -L "$APP_PATH/Contents/MacOS/openpets-cli" | grep -q "Sparkle.framework"
 
       - name: Verify signatures and notarization
         run: |
           codesign --verify --strict --verbose=4 ".build/release-package/OpenPets.app"
+          codesign --verify --strict --verbose=4 ".build/release-package/OpenPets.app/Contents/MacOS/openpets-cli"
           codesign --verify --strict --verbose=4 ".build/release-artifacts/OpenPets-${OPENPETS_VERSION}.dmg"
           xcrun stapler validate ".build/release-package/OpenPets.app"
           xcrun stapler validate ".build/release-artifacts/OpenPets-${OPENPETS_VERSION}.dmg"

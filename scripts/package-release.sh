@@ -7,6 +7,8 @@ BUILD_NUMBER="${OPENPETS_BUILD_NUMBER:-1}"
 RELEASE_TAG="${OPENPETS_RELEASE_TAG:-v$VERSION}"
 APP_NAME="OpenPets"
 APP_BUNDLE="$ROOT/.build/release-package/$APP_NAME.app"
+APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/OpenPets"
+BUNDLED_CLI_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/openpets-cli"
 RELEASE_DIR="$ROOT/.build/release-artifacts"
 APPCAST_DIR="$ROOT/.build/sparkle-updates"
 DMG_ROOT="$ROOT/.build/dmg-root"
@@ -104,17 +106,37 @@ build_product "x86_64-apple-macosx14.0" "$X86_64_BUILD_DIR" "openpets-menubar"
 lipo -create \
   "$ARM64_RELEASE_DIR/openpets-menubar" \
   "$X86_64_RELEASE_DIR/openpets-menubar" \
-  -output "$APP_BUNDLE/Contents/MacOS/OpenPets"
+  -output "$APP_EXECUTABLE"
 lipo -create \
   "$ARM64_RELEASE_DIR/openpets" \
   "$X86_64_RELEASE_DIR/openpets" \
-  -output "$APP_BUNDLE/Contents/MacOS/openpets"
-chmod +x "$APP_BUNDLE/Contents/MacOS/OpenPets" "$APP_BUNDLE/Contents/MacOS/openpets"
+  -output "$BUNDLED_CLI_EXECUTABLE"
+chmod +x "$APP_EXECUTABLE" "$BUNDLED_CLI_EXECUTABLE"
+
+if [[ "$(stat -f '%i' "$APP_EXECUTABLE")" == "$(stat -f '%i' "$BUNDLED_CLI_EXECUTABLE")" ]]; then
+  echo "Packaged app executable and CLI executable resolve to the same file." >&2
+  exit 1
+fi
+
+if ! otool -L "$APP_EXECUTABLE" | grep -q "Sparkle.framework"; then
+  echo "Packaged app executable does not look like the menu bar app." >&2
+  exit 1
+fi
+
+if otool -L "$BUNDLED_CLI_EXECUTABLE" | grep -q "Sparkle.framework"; then
+  echo "Packaged CLI executable does not look like the CLI." >&2
+  exit 1
+fi
 
 cp "$ROOT/Packaging/OpenPets.app/Contents/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :SUFeedURL $SPARKLE_FEED_URL" "$APP_BUNDLE/Contents/Info.plist"
+PACKAGED_BUNDLE_EXECUTABLE="$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_BUNDLE/Contents/Info.plist")"
+if [[ "$PACKAGED_BUNDLE_EXECUTABLE" != "OpenPets" ]]; then
+  echo "CFBundleExecutable must point at the OpenPets menu bar executable." >&2
+  exit 1
+fi
 if [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_PUBLIC_ED_KEY" "$APP_BUNDLE/Contents/Info.plist"
 fi
@@ -140,7 +162,9 @@ if [[ -n "$IDENTITY" ]]; then
   sign_item "$SPARKLE_FRAMEWORK/Versions/B/XPCServices/Downloader.xpc" --preserve-metadata=identifier,entitlements,flags --generate-entitlement-der
   sign_item "$SPARKLE_FRAMEWORK/Versions/B/XPCServices/Installer.xpc" --preserve-metadata=identifier,entitlements,flags --generate-entitlement-der
   sign_item "$SPARKLE_FRAMEWORK" --preserve-metadata=identifier,entitlements,flags --generate-entitlement-der
+  sign_item "$BUNDLED_CLI_EXECUTABLE"
   sign_item "$APP_BUNDLE" --entitlements "$ROOT/Packaging/OpenPets.entitlements"
+  codesign --verify --strict --verbose=4 "$BUNDLED_CLI_EXECUTABLE"
   codesign --verify --strict --verbose=4 "$APP_BUNDLE"
 fi
 

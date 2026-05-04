@@ -23,6 +23,12 @@ OpenPets is a macOS desktop pet that can be controlled from local tools and AI a
 - Swift 6.0 or later.
 - Xcode command line tools.
 
+## Install Release
+
+Download the DMG from the latest GitHub release, open it, and drag `OpenPets.app` to Applications.
+
+The app bundle includes both the menu bar app and the CLI. To install the CLI shim, launch OpenPets and choose `Install Command Line Tool` from the paw menu. This creates `~/.local/bin/openpets`; add `~/.local/bin` to `PATH` if your shell does not already include it.
+
 ## Install From Source
 
 From a local checkout, build the package:

@@ -799,6 +799,97 @@ final class OpenPetsTests: XCTestCase {
         )
     }
 
+    func testCommandLineToolInstallerCreatesUserShim() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executableURL = directory.appendingPathComponent("openpets-cli")
+        let installDirectoryURL = directory.appendingPathComponent("bin", isDirectory: true)
+        try Data("#!/bin/sh\n".utf8).write(to: executableURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+
+        let installedURL = try OpenPetsCommandLineToolInstaller(
+            bundledExecutableURL: executableURL,
+            installDirectoryURL: installDirectoryURL
+        ).install()
+
+        XCTAssertEqual(installedURL.lastPathComponent, "openpets")
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: installedURL.path),
+            executableURL.path
+        )
+    }
+
+    func testCommandLineToolInstallerDoesNotOverwriteRegularFile() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executableURL = directory.appendingPathComponent("openpets-cli")
+        let installDirectoryURL = directory.appendingPathComponent("bin", isDirectory: true)
+        let destinationURL = installDirectoryURL.appendingPathComponent("openpets")
+        try Data("#!/bin/sh\n".utf8).write(to: executableURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+        try FileManager.default.createDirectory(at: installDirectoryURL, withIntermediateDirectories: true)
+        try Data("existing".utf8).write(to: destinationURL)
+
+        XCTAssertThrowsError(try OpenPetsCommandLineToolInstaller(
+            bundledExecutableURL: executableURL,
+            installDirectoryURL: installDirectoryURL
+        ).install()) { error in
+            XCTAssertEqual(error as? OpenPetsCommandLineToolInstallerError, .destinationExists(destinationURL))
+        }
+        XCTAssertEqual(try String(contentsOf: destinationURL), "existing")
+    }
+
+    func testCommandLineToolInstallerDoesNotReplaceUnownedSymlink() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executableURL = directory.appendingPathComponent("openpets-cli")
+        let installDirectoryURL = directory.appendingPathComponent("bin", isDirectory: true)
+        let destinationURL = installDirectoryURL.appendingPathComponent("openpets")
+        let otherToolURL = directory.appendingPathComponent("other-openpets")
+        try Data("#!/bin/sh\n".utf8).write(to: executableURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+        try FileManager.default.createDirectory(at: installDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: destinationURL, withDestinationURL: otherToolURL)
+
+        XCTAssertThrowsError(try OpenPetsCommandLineToolInstaller(
+            bundledExecutableURL: executableURL,
+            installDirectoryURL: installDirectoryURL
+        ).install()) { error in
+            XCTAssertEqual(error as? OpenPetsCommandLineToolInstallerError, .destinationExists(destinationURL))
+        }
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: destinationURL.path),
+            otherToolURL.path
+        )
+    }
+
+    func testCommandLineToolInstallerReplacesOpenPetsShim() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executableURL = directory.appendingPathComponent("openpets-cli")
+        let installDirectoryURL = directory.appendingPathComponent("bin", isDirectory: true)
+        let destinationURL = installDirectoryURL.appendingPathComponent("openpets")
+        let previousExecutableURL = directory
+            .appendingPathComponent("OpenPets.app", isDirectory: true)
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("MacOS", isDirectory: true)
+            .appendingPathComponent("openpets-cli")
+        try Data("#!/bin/sh\n".utf8).write(to: executableURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+        try FileManager.default.createDirectory(at: installDirectoryURL, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: destinationURL, withDestinationURL: previousExecutableURL)
+
+        _ = try OpenPetsCommandLineToolInstaller(
+            bundledExecutableURL: executableURL,
+            installDirectoryURL: installDirectoryURL
+        ).install()
+
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: destinationURL.path),
+            executableURL.path
+        )
+    }
+
     func testOpenPetsClientReportsRunningPet() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("openpets-\(UUID().uuidString).sock")

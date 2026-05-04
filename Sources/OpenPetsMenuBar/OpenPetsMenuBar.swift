@@ -140,6 +140,11 @@ final class OpenPetsMenuBarController: NSObject {
         action: #selector(openConfigFolder),
         keyEquivalent: ""
     )
+    private lazy var installCommandLineToolItem = NSMenuItem(
+        title: "Install Command Line Tool",
+        action: #selector(installCommandLineTool),
+        keyEquivalent: ""
+    )
     private lazy var checkForUpdatesItem = NSMenuItem(
         title: "Check for Updates...",
         action: #selector(checkForUpdates),
@@ -159,7 +164,7 @@ final class OpenPetsMenuBarController: NSObject {
         )
 
         let menu = NSMenu()
-        for item in [startStopServerItem, serverStatusItem, copyServerURLItem, wakeStopPetItem, openConfigItem, checkForUpdatesItem, quitItem] {
+        for item in [startStopServerItem, serverStatusItem, copyServerURLItem, wakeStopPetItem, openConfigItem, installCommandLineToolItem, checkForUpdatesItem, quitItem] {
             item.target = self
         }
         menu.addItem(startStopServerItem)
@@ -170,6 +175,7 @@ final class OpenPetsMenuBarController: NSObject {
         menu.addItem(activePetItem)
         menu.addItem(.separator())
         menu.addItem(openConfigItem)
+        menu.addItem(installCommandLineToolItem)
         menu.addItem(checkForUpdatesItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
@@ -218,6 +224,21 @@ final class OpenPetsMenuBarController: NSObject {
             NSWorkspace.shared.open(OpenPetsPaths.defaultConfigurationDirectory)
         } catch {
             showError("Could not open config folder", detail: error.localizedDescription)
+        }
+    }
+
+    @objc private func installCommandLineTool() {
+        do {
+            let bundledExecutableURL = try OpenPetsCommandLineToolInstaller.bundledExecutableURL()
+            let installedURL = try OpenPetsCommandLineToolInstaller(
+                bundledExecutableURL: bundledExecutableURL
+            ).install()
+            showInfo(
+                "Installed Command Line Tool",
+                detail: "Installed \(installedURL.path). Add \(installedURL.deletingLastPathComponent().path) to PATH if your shell does not find openpets."
+            )
+        } catch {
+            showError("Could not install command line tool", detail: error.localizedDescription)
         }
     }
 
