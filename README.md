@@ -91,6 +91,8 @@ print(response.threadId ?? "")
 
 The menu bar app, CLI, MCP server, and any app using the library all talk to the same local pet by default, so the companion becomes more useful as more tools connect to it.
 
+See [Shared Pet System](./docs/shared-pet-system.md) for the default socket topology, MCP behavior, `threadId` workflow, and guidance for app integrations.
+
 ## Quick Start
 
 Start the menu bar app:
