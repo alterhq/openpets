@@ -46,6 +46,51 @@ swift build -c release
 
 The release binaries are written under `.build/release/`.
 
+## Use as a Swift Package
+
+OpenPets can be added as a library dependency to another Swift package or macOS app. The package product is named `OpenPets`, and the Swift module to import is `OpenPetsCore`.
+
+In Xcode, add this repository as a package dependency:
+
+```text
+https://github.com/alterhq/openpets.git
+```
+
+In a `Package.swift` file, add OpenPets to `dependencies`:
+
+```swift
+.package(url: "https://github.com/alterhq/openpets.git", branch: "main")
+```
+
+Then add the library product to the target that should send pet commands:
+
+```swift
+.target(
+    name: "YourApp",
+    dependencies: [
+        .product(name: "OpenPets", package: "openpets")
+    ]
+)
+```
+
+Import the module and send commands through the shared local pet socket:
+
+```swift
+import OpenPetsCore
+
+let client = OpenPetsClient()
+
+let response = try client.send(.notify(PetNotification(
+    title: "Build Passed",
+    text: "All tests completed.",
+    status: "done"
+)))
+
+print(response.threadId ?? "")
+```
+
+The menu bar app, CLI, MCP server, and any app using the library all talk to the same local pet by default, so the companion becomes more useful as more tools connect to it.
+
 ## Quick Start
 
 Start the menu bar app:
