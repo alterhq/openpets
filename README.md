@@ -226,6 +226,25 @@ Pet window positions are stored in:
 ~/.config/openpets/positions.json
 ```
 
+Installed pets are stored in:
+
+```text
+~/Library/Application Support/OpenPets/Pets/
+```
+
+OpenPets also discovers valid pet bundles from these user locations:
+
+```text
+~/.codex/pets/
+~/.local/share/openpets/pets/
+~/.config/openpets/pets/
+~/.config/openpets/Pets/
+~/.config/openpets/
+```
+
+If `XDG_DATA_HOME` is set, OpenPets checks `$XDG_DATA_HOME/openpets/pets/`
+instead of `~/.local/share/openpets/pets/`.
+
 ## Codex Pets
 
 OpenPets uses the Codex Pets format. A pet bundle is a directory containing a `pet.json` manifest and a spritesheet.

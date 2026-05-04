@@ -643,6 +643,48 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(bundle.manifest.displayName, "Starcorn")
     }
 
+    func testPetLibraryDiscoversInstalledAndKnownUserPetDirectories() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let installedURL = root.appendingPathComponent("Installed", isDirectory: true)
+        let codexURL = root.appendingPathComponent(".codex/pets", isDirectory: true)
+        let configURL = root.appendingPathComponent(".config/openpets", isDirectory: true)
+        let installedPetURL = installedURL.appendingPathComponent("installed-pet-renamed", isDirectory: true)
+        try makePetBundle(id: "installed-pet", at: installedPetURL)
+        try makePetBundle(
+            id: "codex-pet",
+            at: codexURL.appendingPathComponent("codex-pet", isDirectory: true)
+        )
+        try makePetBundle(id: "config-pet", at: configURL)
+        try makePetBundle(
+            id: "installed-pet",
+            at: codexURL.appendingPathComponent("installed-pet", isDirectory: true)
+        )
+
+        let library = OpenPetsPetLibrary(
+            installedPetsDirectory: installedURL,
+            discoveredPetsDirectories: [codexURL, configURL]
+        )
+        let pets = library.listPets()
+
+        XCTAssertEqual(
+            pets.map(\.id),
+            [OpenPetsBundledPets.starcornID, "installed-pet", "codex-pet", "config-pet"]
+        )
+        XCTAssertEqual(
+            library.petURL(for: "installed-pet")?.standardizedFileURL.path,
+            installedPetURL.standardizedFileURL.path
+        )
+        XCTAssertEqual(
+            library.petURL(for: "codex-pet")?.standardizedFileURL.path,
+            codexURL.appendingPathComponent("codex-pet", isDirectory: true).standardizedFileURL.path
+        )
+        XCTAssertEqual(
+            library.petURL(for: "config-pet")?.standardizedFileURL.path,
+            configURL.standardizedFileURL.path
+        )
+    }
+
     func testInstallDeepLinkParsesDownloadURLAndPetID() throws {
         let request = try OpenPetsInstallRequest.parseDeepLink(URL(string: "openpets://install?url=https%3A%2F%2Fopenpets.sh%2Fapi%2Fpets%2Fstarcorn%2Fdownload%3Fticket%3Dabc&id=starcorn")!)
 

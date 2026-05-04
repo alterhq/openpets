@@ -64,7 +64,7 @@ private final class OpenPetsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
 }
 
 @MainActor
-final class OpenPetsMenuBarController: NSObject {
+final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     private enum MCPState: Equatable {
         case stopped
         case starting
@@ -164,6 +164,7 @@ final class OpenPetsMenuBarController: NSObject {
         )
 
         let menu = NSMenu()
+        menu.delegate = self
         for item in [startStopServerItem, serverStatusItem, copyServerURLItem, wakeStopPetItem, openConfigItem, installCommandLineToolItem, checkForUpdatesItem, quitItem] {
             item.target = self
         }
@@ -180,6 +181,11 @@ final class OpenPetsMenuBarController: NSObject {
         menu.addItem(.separator())
         menu.addItem(quitItem)
         statusItem.menu = menu
+        refreshMenu()
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        reloadConfiguration()
         refreshMenu()
     }
 

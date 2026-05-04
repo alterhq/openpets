@@ -21,9 +21,14 @@ public struct OpenPetsPetReference: Codable, Equatable, Sendable {
 
 public struct OpenPetsPetLibrary: Sendable {
     public var installedPetsDirectory: URL
+    public var discoveredPetsDirectories: [URL]
 
-    public init(installedPetsDirectory: URL = OpenPetsPaths.defaultInstalledPetsDirectory) {
+    public init(
+        installedPetsDirectory: URL = OpenPetsPaths.defaultInstalledPetsDirectory,
+        discoveredPetsDirectories: [URL] = OpenPetsPaths.defaultDiscoveredPetsDirectories
+    ) {
         self.installedPetsDirectory = installedPetsDirectory
+        self.discoveredPetsDirectories = discoveredPetsDirectories
     }
 
     public func activePetURL(for configuration: OpenPetsConfiguration) -> URL {
@@ -37,7 +42,10 @@ public struct OpenPetsPetLibrary: Sendable {
 
         let installedURL = installedPetsDirectory.appendingPathComponent(id, isDirectory: true)
         guard FileManager.default.fileExists(atPath: installedURL.appendingPathComponent("pet.json").path) else {
-            return nil
+            if let installedBundleURL = petBundleURL(for: id, in: [installedPetsDirectory]) {
+                return installedBundleURL
+            }
+            return discoveredPetURL(for: id)
         }
         return installedURL
     }
@@ -51,29 +59,76 @@ public struct OpenPetsPetLibrary: Sendable {
                 location: .bundled
             )
         ]
+        var seenPetIDs = Set([OpenPetsBundledPets.starcornID])
 
-        guard
-            let children = try? FileManager.default.contentsOfDirectory(
-                at: installedPetsDirectory,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )
-        else {
-            return pets
-        }
-
-        for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            guard let bundle = try? PetBundle.load(from: child) else {
+        for bundleURL in petBundleURLs(in: installedPetsDirectory) {
+            guard let bundle = try? PetBundle.load(from: bundleURL), seenPetIDs.insert(bundle.manifest.id).inserted else {
                 continue
             }
             pets.append(OpenPetsPetReference(
                 id: bundle.manifest.id,
                 displayName: bundle.manifest.displayName,
-                directoryURL: child,
+                directoryURL: bundleURL,
                 location: .installed
             ))
         }
 
+        for directory in discoveredPetsDirectories {
+            for bundleURL in petBundleURLs(in: directory) {
+                guard let bundle = try? PetBundle.load(from: bundleURL), seenPetIDs.insert(bundle.manifest.id).inserted else {
+                    continue
+                }
+                pets.append(OpenPetsPetReference(
+                    id: bundle.manifest.id,
+                    displayName: bundle.manifest.displayName,
+                    directoryURL: bundleURL,
+                    location: .installed
+                ))
+            }
+        }
+
         return pets
+    }
+
+    private func discoveredPetURL(for id: String) -> URL? {
+        petBundleURL(for: id, in: discoveredPetsDirectories)
+    }
+
+    private func petBundleURL(for id: String, in directories: [URL]) -> URL? {
+        for directory in directories {
+            for bundleURL in petBundleURLs(in: directory) {
+                guard let bundle = try? PetBundle.load(from: bundleURL), bundle.manifest.id == id else {
+                    continue
+                }
+                return bundleURL
+            }
+        }
+        return nil
+    }
+
+    private func petBundleURLs(in directory: URL) -> [URL] {
+        var bundles: [URL] = []
+        if FileManager.default.fileExists(atPath: directory.appendingPathComponent("pet.json").path) {
+            bundles.append(directory)
+        }
+
+        guard
+            let children = try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+        else {
+            return bundles
+        }
+
+        for child in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            guard FileManager.default.fileExists(atPath: child.appendingPathComponent("pet.json").path) else {
+                continue
+            }
+            bundles.append(child)
+        }
+
+        return bundles
     }
 }

@@ -35,4 +35,35 @@ public enum OpenPetsPaths {
     public static var defaultInstalledPetsDirectory: URL {
         defaultApplicationSupportDirectory.appendingPathComponent("Pets", isDirectory: true)
     }
+
+    public static var defaultCodexPetsDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex", isDirectory: true)
+            .appendingPathComponent("pets", isDirectory: true)
+    }
+
+    public static var defaultUserDataPetsDirectory: URL {
+        if let xdgDataHome = ProcessInfo.processInfo.environment["XDG_DATA_HOME"],
+           !xdgDataHome.isEmpty {
+            return URL(fileURLWithPath: xdgDataHome, isDirectory: true)
+                .appendingPathComponent("openpets", isDirectory: true)
+                .appendingPathComponent("pets", isDirectory: true)
+        }
+
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local", isDirectory: true)
+            .appendingPathComponent("share", isDirectory: true)
+            .appendingPathComponent("openpets", isDirectory: true)
+            .appendingPathComponent("pets", isDirectory: true)
+    }
+
+    public static var defaultDiscoveredPetsDirectories: [URL] {
+        [
+            defaultCodexPetsDirectory,
+            defaultUserDataPetsDirectory,
+            defaultConfigurationDirectory.appendingPathComponent("pets", isDirectory: true),
+            defaultConfigurationDirectory.appendingPathComponent("Pets", isDirectory: true),
+            defaultConfigurationDirectory
+        ]
+    }
 }
