@@ -1,56 +1,67 @@
 # OpenPets
 
-OpenPets is a macOS desktop pet that can be controlled from local tools and AI agents. It uses the Codex Pets format and ships with a menu bar app, a command-line client, and an MCP server so agents can show task progress, completion states, review prompts, and lightweight animations through a visible desktop companion.
+OpenPets is a native macOS desktop pet for visible agent progress, review prompts, completion states, and lightweight animations across local coding tools.
 
-## Features
+It gives Codex Pets a shared home outside one assistant. The menu bar app, MCP server, Swift package, and CLI can all talk to the same local pet, so Codex, Claude Code, Cursor, OpenCode, Pi CLI, generic MCP clients, local apps, and scripts can report work through one visible desktop companion.
 
-- Native macOS desktop pet rendered as a borderless floating panel.
-- Menu bar app for starting the MCP server, waking or stopping the pet, and copying the MCP URL.
-- Local MCP HTTP server with tools for notifications, animations, status checks, and pet lifecycle control.
-- CLI for running a pet directly or sending commands over the local Unix socket.
-- Bundled Starcorn pet and support for custom Codex Pets using an 8x9 sprite atlas.
+## Install
 
-## Goals
+Install OpenPets from the [latest GitHub release](https://github.com/alterhq/openpets/releases/latest).
 
-- Build an open ecosystem for Codex Pets.
-- Support extensibility and customization.
-- Liberate pets from Codex so they can be used with Claude Code, Claude Cowork, OpenCode, Pi, OpenClaw, Hermes, Alter, and other AI assistants.
-- Have fun experimenting with desktop companions.
+Download the app from the latest release and move it to Applications. OpenPets requires macOS 14 or later.
 
-## Requirements
+After installing the app, launch OpenPets from Applications. The menu bar app can wake the bundled Starcorn pet, start the local MCP server, copy the MCP URL, open the config folder, and stop the pet.
 
-- macOS 14 or later.
-- Swift 6.0 or later.
-- Xcode command line tools.
+## Quick Start
 
-## Install Release
+The default MCP endpoint is:
 
-Download the DMG from the latest GitHub release, open it, and drag `OpenPets.app` to Applications.
-
-The app bundle includes both the menu bar app and the CLI. To install the CLI shim, launch OpenPets and choose `Install Command Line Tool` from the paw menu. This creates `~/.local/bin/openpets`; add `~/.local/bin` to `PATH` if your shell does not already include it.
-
-## Install From Source
-
-From a local checkout, build the package:
-
-```sh
-cd openpets
-swift build
+```text
+http://127.0.0.1:3001/mcp
 ```
 
-Run the test suite:
+Configure your assistant or MCP client with that endpoint. Once connected, agents can call OpenPets tools to wake the pet, show task state, update threaded messages, and play lightweight animations.
 
-```sh
-swift test
-```
+Add the recommended assistant instructions so the assistant uses the desktop pet consistently. See [docs/ai-assistants](./docs/ai-assistants/) for setup guidance covering OpenCode, Claude Code, Cursor, Pi CLI, and generic MCP clients.
 
-Build optimized executables:
+## What You Can Do
 
-```sh
-swift build -c release
-```
+- Show task progress, completion, review, waiting, and failure states through a visible desktop companion.
+- Let multiple local tools share one pet instead of each app owning a separate status UI.
+- Send notifications and animations from an MCP client, a Swift app, or CLI scripts.
+- Run the bundled Starcorn pet or install custom Codex Pets using an 8x9 sprite atlas.
+- Use action URLs on notifications for lightweight follow-up flows.
 
-The release binaries are written under `.build/release/`.
+## Roadmap
+
+- Plugin ecosystem for assistant and local tool behaviors.
+- Catalog of apps and agents using OpenPets.
+- Pet catalog and gallery improvements for discovering and installing compatible pet bundles.
+- Dedicated Swift package distribution for apps that only need the OpenPets client APIs.
+- Easier assistant onboarding for Codex, Claude Code, Cursor, OpenCode, Pi CLI, and generic MCP clients.
+- Richer task states with action buttons and shared task workflows.
+- Continued focus on one shared local desktop companion across multiple tools.
+
+## Integration Details
+
+OpenPets exposes local MCP tools from the menu bar app:
+
+| Tool | Purpose |
+| --- | --- |
+| `get_openpets_status` | Read MCP server, pet, socket, and config status. |
+| `wake_pet` | Start or bring back the desktop pet. |
+| `stop_pet` | Stop the desktop pet. |
+| `notify` | Show or update a threaded message bubble with a status-driven animation. |
+| `play_pet_animation` | Play an animation without showing text. |
+| `stop_pet_animation` | Return the pet to idle without stopping it or clearing messages. |
+| `clear_pet_message` | Clear one message bubble by `threadId`. |
+| `ping_pet` | Confirm the pet process can receive commands. |
+
+Valid notification statuses are `running`, `review`, `done`, `failed`, `waiting`, and `message`.
+
+The shared pet can show multiple task bubbles at once. A `notify` call returns a `threadId`; pass that ID back on later updates to replace the same task bubble instead of creating a new one.
+
+See [Shared Pet System](./docs/shared-pet-system.md) for the default socket topology, MCP behavior, `threadId` workflow, and guidance for app integrations.
 
 ## Use as a Swift Package
 
@@ -95,97 +106,38 @@ let response = try client.send(.notify(PetNotification(
 print(response.threadId ?? "")
 ```
 
-The menu bar app, CLI, MCP server, and any app using the library all talk to the same local pet by default, so the companion becomes more useful as more tools connect to it.
+## Development
 
-See [Shared Pet System](./docs/shared-pet-system.md) for the default socket topology, MCP behavior, `threadId` workflow, and guidance for app integrations.
+Source builds require Swift 6.0 or later and Xcode command line tools.
 
-## Quick Start
+From a local checkout, build the package:
 
-Start the menu bar app:
+```sh
+cd openpets
+swift build
+```
+
+Run the test suite:
+
+```sh
+swift test
+```
+
+Start the menu bar app from source:
 
 ```sh
 swift run openpets-menubar
 ```
 
-The menu bar app starts the local MCP server and can wake the bundled Starcorn pet. Use the paw menu to view server status, copy the MCP URL, open the config folder, or stop the pet.
-
-The default MCP endpoint is:
-
-```text
-http://127.0.0.1:3001/mcp
-```
-
-## CLI Usage
-
-Run a pet from a pet bundle directory:
+Build optimized executables:
 
 ```sh
-swift run openpets run --pet Sources/OpenPets/Resources/Pets/starcorn
+swift build -c release
 ```
 
-Send a notification to a running pet:
+The release binaries are written under `.build/release/`. Release packaging is handled by `scripts/package-release.sh`.
 
-```sh
-swift run openpets notify --title "Build Passed" --status done --text "All tests completed."
-```
-
-The command prints a `threadId`. Pass it back with `--thread` to replace that task's bubble instead of creating a new one:
-
-```sh
-swift run openpets notify --thread THREAD_ID --title "Build Passed" --status done --text "All tests completed."
-```
-
-Play an animation:
-
-```sh
-swift run openpets animate waving --once
-```
-
-Stop the current animation and return the pet to idle without clearing messages:
-
-```sh
-swift run openpets stop-animation
-```
-
-Check connectivity:
-
-```sh
-swift run openpets ping
-```
-
-Clear one message bubble or stop the pet process:
-
-```sh
-swift run openpets clear --thread THREAD_ID
-swift run openpets stop
-```
-
-Available animations are `idle`, `running-right`, `running-left`, `waving`, `jumping`, `failed`, `waiting`, `running`, and `review`.
-
-## MCP Tools
-
-OpenPets exposes these MCP tools from the menu bar app:
-
-| Tool | Purpose |
-| --- | --- |
-| `get_openpets_status` | Read MCP server, pet, socket, and config status. |
-| `wake_pet` | Start or bring back the desktop pet. |
-| `stop_pet` | Stop the desktop pet. |
-| `notify` | Show or update a threaded message bubble with a status-driven animation. |
-| `play_pet_animation` | Play an animation without showing text. |
-| `stop_pet_animation` | Return the pet to idle without stopping it or clearing messages. |
-| `clear_pet_message` | Clear one message bubble by `threadId`. |
-| `ping_pet` | Confirm the pet process can receive commands. |
-
-Valid notification statuses are `running`, `review`, `done`, `failed`, `waiting`, and `message`.
-
-If you use OpenPets through an AI coding assistant, add the recommended assistant instructions so the assistant uses the desktop pet consistently instead of treating notifications as optional. See [docs/ai-assistants](./docs/ai-assistants/) for setup guidance covering OpenCode, Claude Code, Cursor, Pi CLI, and generic MCP clients.
-
-Example MCP client URL:
-
-```text
-http://127.0.0.1:3001/mcp
-```
+See `CONTRIBUTING.md` for contributor setup, workflow, and pull request guidance.
 
 ## Configuration
 
@@ -249,8 +201,7 @@ OpenPets also discovers valid pet bundles from these user locations:
 ~/.config/openpets/
 ```
 
-If `XDG_DATA_HOME` is set, OpenPets checks `$XDG_DATA_HOME/openpets/pets/`
-instead of `~/.local/share/openpets/pets/`.
+If `XDG_DATA_HOME` is set, OpenPets checks `$XDG_DATA_HOME/openpets/pets/` instead of `~/.local/share/openpets/pets/`.
 
 ## Codex Pets
 
@@ -291,17 +242,56 @@ Spritesheets are expected to use an 8 column by 9 row atlas. The current animati
 
 The spritesheet width must be divisible by 8 and the height must be divisible by 9.
 
-## Development
+## CLI Usage
 
-Common commands:
+The CLI is available for scripts, manual checks, and local development. For AI assistants, prefer the MCP endpoint above.
+
+To install the CLI shim, choose `Install Command Line Tool` from the paw menu. This creates `~/.local/bin/openpets`; add `~/.local/bin` to `PATH` if your shell does not already include it.
+
+Run a pet from a pet bundle directory:
 
 ```sh
-swift build
-swift test
-swift run openpets-menubar
+openpets run --pet Sources/OpenPets/Resources/Pets/starcorn
 ```
 
-See `CONTRIBUTING.md` for contributor setup, workflow, and pull request guidance.
+Send a notification to a running pet:
+
+```sh
+openpets notify --title "Build Passed" --status done --text "All tests completed."
+```
+
+The command prints a `threadId`. Pass it back with `--thread` to replace that task's bubble instead of creating a new one:
+
+```sh
+openpets notify --thread THREAD_ID --title "Build Passed" --status done --text "All tests completed."
+```
+
+Play an animation:
+
+```sh
+openpets animate waving --once
+```
+
+Stop the current animation and return the pet to idle without clearing messages:
+
+```sh
+openpets stop-animation
+```
+
+Check connectivity:
+
+```sh
+openpets ping
+```
+
+Clear one message bubble or stop the pet process:
+
+```sh
+openpets clear --thread THREAD_ID
+openpets stop
+```
+
+Available animations are `idle`, `running-right`, `running-left`, `waving`, `jumping`, `failed`, `waiting`, `running`, and `review`.
 
 ## Security
 
