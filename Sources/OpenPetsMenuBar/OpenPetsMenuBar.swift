@@ -140,6 +140,11 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         action: #selector(togglePet),
         keyEquivalent: ""
     )
+    private lazy var callPetItem = NSMenuItem(
+        title: "Call my pet",
+        action: #selector(callPet),
+        keyEquivalent: ""
+    )
     private lazy var activePetItem = NSMenuItem(
         title: "Active Pet",
         action: nil,
@@ -183,6 +188,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         var serverStatusItem: NSMenuItem
         var copyServerURLItem: NSMenuItem
         var wakeStopPetItem: NSMenuItem
+        var callPetItem: NSMenuItem
         var activePetItem: NSMenuItem
         var installFromLinkItem: NSMenuItem?
         var openConfigItem: NSMenuItem
@@ -197,6 +203,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 serverStatusItem,
                 copyServerURLItem,
                 wakeStopPetItem,
+                callPetItem,
                 openConfigItem,
                 installCommandLineToolItem,
                 setUpAgentsItem,
@@ -258,6 +265,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             serverStatusItem: serverStatusItem,
             copyServerURLItem: copyServerURLItem,
             wakeStopPetItem: wakeStopPetItem,
+            callPetItem: callPetItem,
             activePetItem: activePetItem,
             installFromLinkItem: installFromLinkItem,
             openConfigItem: openConfigItem,
@@ -298,6 +306,11 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             wakeStopPetItem: NSMenuItem(
                 title: "Wake Pet",
                 action: #selector(togglePet),
+                keyEquivalent: ""
+            ),
+            callPetItem: NSMenuItem(
+                title: "Call my pet",
+                action: #selector(callPet),
                 keyEquivalent: ""
             ),
             activePetItem: NSMenuItem(
@@ -345,6 +358,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(items.copyServerURLItem)
         menu.addItem(.separator())
         menu.addItem(items.wakeStopPetItem)
+        menu.addItem(items.callPetItem)
         menu.addItem(items.activePetItem)
         if let installFromLinkItem = items.installFromLinkItem {
             menu.addItem(installFromLinkItem)
@@ -393,6 +407,15 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             } catch {
                 showError("Could not wake pet", detail: error.localizedDescription)
             }
+        }
+    }
+
+    @objc private func callPet() {
+        do {
+            try wakePet()
+            petSession?.callPet()
+        } catch {
+            showError("Could not call pet", detail: error.localizedDescription)
         }
     }
 

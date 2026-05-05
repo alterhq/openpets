@@ -133,6 +133,38 @@ struct PetLaunchMotion {
     }
 }
 
+struct PetCallMotion {
+    static let frameIntervalNanoseconds: UInt64 = 16_666_667
+    private static let minimumDuration: TimeInterval = 0.28
+    private static let maximumDuration: TimeInterval = 0.9
+    private static let pointsPerSecond: CGFloat = 900
+
+    static func duration(from origin: CGPoint, to targetOrigin: CGPoint) -> TimeInterval {
+        let distance = hypot(targetOrigin.x - origin.x, targetOrigin.y - origin.y)
+        return min(max(TimeInterval(distance / pointsPerSecond), minimumDuration), maximumDuration)
+    }
+
+    static func origin(from origin: CGPoint, to targetOrigin: CGPoint, progress: CGFloat) -> CGPoint {
+        let progress = min(max(progress, 0), 1)
+        let easedProgress = 1 - pow(1 - progress, 3)
+        return CGPoint(
+            x: origin.x + (targetOrigin.x - origin.x) * easedProgress,
+            y: origin.y + (targetOrigin.y - origin.y) * easedProgress
+        )
+    }
+
+    static func animation(from origin: CGPoint, to targetOrigin: CGPoint, fallback: PetAnimation) -> PetAnimation {
+        let deltaX = targetOrigin.x - origin.x
+        if deltaX > PetLaunchMotion.minimumHorizontalAnimationSpeed {
+            return .runningRight
+        }
+        if deltaX < -PetLaunchMotion.minimumHorizontalAnimationSpeed {
+            return .runningLeft
+        }
+        return fallback == .runningLeft ? .runningLeft : .runningRight
+    }
+}
+
 public enum OpenPetsHost {
     @MainActor
     public static func run(configuration: OpenPetsHostConfiguration) throws {
@@ -209,6 +241,10 @@ public final class OpenPetsHostSession {
         controller?.savePosition()
         controller?.close()
         controller = nil
+    }
+
+    public func callPet() {
+        controller?.callPet()
     }
 
     @discardableResult
@@ -305,6 +341,8 @@ private final class PetHostCommandBridge: @unchecked Sendable {
 
 @MainActor
 struct PetWindowPositioning {
+    static let fallbackVisibleFrame = CGRect(x: 0, y: 0, width: 1280, height: 800)
+
     static func windowOrigin(preservingPetAnchor petAnchor: CGPoint, petFrame: CGRect) -> CGPoint {
         CGPoint(
             x: petAnchor.x - petFrame.minX,
@@ -317,6 +355,39 @@ struct PetWindowPositioning {
             width: max(316, spriteSize.width + 120),
             height: spriteSize.height + messageAreaHeight
         )
+    }
+
+    static func initialWindowOrigin(
+        storedPosition: StoredPetPosition?,
+        legacyContentSize: CGSize,
+        spriteSize: CGSize,
+        stableSpriteBounds: CGRect,
+        petFrame: CGRect,
+        preferredVisibleFrame: CGRect,
+        activeVisibleFrames: [CGRect]
+    ) -> CGPoint {
+        let defaultOrigin = defaultWindowOrigin(contentSize: legacyContentSize, visibleFrame: preferredVisibleFrame)
+        let initialAnchor = initialPetAnchor(
+            storedPosition: storedPosition,
+            legacyContentSize: legacyContentSize,
+            spriteSize: spriteSize,
+            stableSpriteBounds: stableSpriteBounds,
+            defaultWindowOrigin: defaultOrigin
+        )
+        let initialOrigin = windowOrigin(preservingPetAnchor: initialAnchor, petFrame: petFrame)
+
+        guard isVisible(screenFrame(windowOrigin: initialOrigin, petFrame: petFrame), in: activeVisibleFrames) else {
+            let defaultAnchor = initialPetAnchor(
+                storedPosition: nil,
+                legacyContentSize: legacyContentSize,
+                spriteSize: spriteSize,
+                stableSpriteBounds: stableSpriteBounds,
+                defaultWindowOrigin: defaultOrigin
+            )
+            return windowOrigin(preservingPetAnchor: defaultAnchor, petFrame: petFrame)
+        }
+
+        return initialOrigin
     }
 
     static func initialPetAnchor(
@@ -360,11 +431,45 @@ struct PetWindowPositioning {
     }
 
     static func defaultWindowOrigin(contentSize: CGSize) -> CGPoint {
-        let screenFrame = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
-        return CGPoint(
-            x: screenFrame.maxX - contentSize.width - 40,
-            y: screenFrame.minY + 40
+        defaultWindowOrigin(contentSize: contentSize, visibleFrame: preferredVisibleFrame())
+    }
+
+    static func defaultWindowOrigin(contentSize: CGSize, visibleFrame: CGRect) -> CGPoint {
+        CGPoint(
+            x: visibleFrame.maxX - contentSize.width - 40,
+            y: visibleFrame.minY + 40
         )
+    }
+
+    static func preferredVisibleFrame() -> CGRect {
+        preferredVisibleFrame(
+            mainVisibleFrame: NSScreen.main?.visibleFrame,
+            screenVisibleFrames: NSScreen.screens.map(\.visibleFrame)
+        )
+    }
+
+    static func activeVisibleFrames() -> [CGRect] {
+        let frames = NSScreen.screens.map(\.visibleFrame)
+        return frames.isEmpty ? [fallbackVisibleFrame] : frames
+    }
+
+    static func preferredVisibleFrame(mainVisibleFrame: CGRect?, screenVisibleFrames: [CGRect]) -> CGRect {
+        mainVisibleFrame ?? screenVisibleFrames.first ?? fallbackVisibleFrame
+    }
+
+    static func screenFrame(windowOrigin: CGPoint, petFrame: CGRect) -> CGRect {
+        CGRect(
+            x: windowOrigin.x + petFrame.minX,
+            y: windowOrigin.y + petFrame.minY,
+            width: petFrame.width,
+            height: petFrame.height
+        )
+    }
+
+    static func isVisible(_ frame: CGRect, in visibleFrames: [CGRect]) -> Bool {
+        visibleFrames.contains { visibleFrame in
+            frame.intersects(visibleFrame)
+        }
     }
 }
 
@@ -377,8 +482,13 @@ private final class PetHostController {
     private let messagePanel: NSPanel
     private let messageView: PetMessagePanelView
     private let messageAreaHeight: CGFloat
+    private let legacyContentSize: CGSize
+    private let spriteSize: CGSize
+    private let stableSpriteBounds: CGRect
     private var animationTimer: Timer?
     private var glideTimer: Timer?
+    private var callMotionTask: Task<Void, Never>?
+    private var screenParametersObserver: NSObjectProtocol?
     private var glideVelocity = CGVector.zero
     private var lastGlideUpdateTime: TimeInterval?
     private var glideAnimationFallback: PetAnimation = .runningRight
@@ -403,15 +513,15 @@ private final class PetHostController {
         messageAreaHeight = max(display.messageAreaHeight, 108)
 
         let frames = try PetHostController.loadFrames(from: petBundle)
-        let spriteSize = CGSize(
+        spriteSize = CGSize(
             width: CGFloat(petBundle.atlas.cellWidth) * display.scale,
             height: CGFloat(petBundle.atlas.cellHeight) * display.scale
         )
-        let legacyContentSize = PetWindowPositioning.legacyContentSize(
+        legacyContentSize = PetWindowPositioning.legacyContentSize(
             spriteSize: spriteSize,
             messageAreaHeight: messageAreaHeight
         )
-        let stableSpriteBounds = PetSpriteVisibility.stableVisibleBounds(
+        stableSpriteBounds = PetSpriteVisibility.stableVisibleBounds(
             in: frames,
             spriteSize: spriteSize
         )
@@ -426,16 +536,15 @@ private final class PetHostController {
             messageAreaHeight: messageAreaHeight
         )
 
-        let initialAnchor = PetWindowPositioning.initialPetAnchor(
+        let contentSize = petView.bounds.size
+        let initialOrigin = PetWindowPositioning.initialWindowOrigin(
             storedPosition: positionStore.loadStoredPosition(forPetID: petBundle.manifest.id),
             legacyContentSize: legacyContentSize,
             spriteSize: spriteSize,
-            stableSpriteBounds: stableSpriteBounds
-        )
-        let contentSize = petView.bounds.size
-        let initialOrigin = PetWindowPositioning.windowOrigin(
-            preservingPetAnchor: initialAnchor,
-            petFrame: petView.petAnchorFrame
+            stableSpriteBounds: stableSpriteBounds,
+            petFrame: petView.petAnchorFrame,
+            preferredVisibleFrame: PetWindowPositioning.preferredVisibleFrame(),
+            activeVisibleFrames: PetWindowPositioning.activeVisibleFrames()
         )
         window = NSPanel(
             contentRect: CGRect(origin: initialOrigin, size: contentSize),
@@ -473,6 +582,7 @@ private final class PetHostController {
         }
         petView.onDragStart = { [weak self] in
             self?.cancelLaunchGlide()
+            self?.cancelCallMotion()
             self?.messagePanel.ignoresMouseEvents = true
         }
         petView.onDragMove = { [weak self] _ in
@@ -494,6 +604,15 @@ private final class PetHostController {
         messageView.onLayoutChanged = { [weak self] in
             self?.positionMessagePanel()
         }
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.recoverFromScreenChangeIfNeeded()
+            }
+        }
 
         play(.idle, loop: true, ttlSeconds: nil)
     }
@@ -510,6 +629,11 @@ private final class PetHostController {
         animationTimer?.invalidate()
         animationTimer = nil
         cancelLaunchGlide()
+        cancelCallMotion()
+        if let screenParametersObserver {
+            NotificationCenter.default.removeObserver(screenParametersObserver)
+            self.screenParametersObserver = nil
+        }
         ttlWorkItem?.cancel()
         ttlWorkItem = nil
         cancelMessageWorkItems()
@@ -548,10 +672,58 @@ private final class PetHostController {
         try? positionStore.savePosition(petAnchorInScreen(), kind: .petAnchor, forPetID: petBundle.manifest.id)
     }
 
+    func callPet() {
+        let currentOrigin = window.frame.origin
+        let targetOrigin = defaultWindowOrigin()
+        guard hypot(targetOrigin.x - currentOrigin.x, targetOrigin.y - currentOrigin.y) > 1 else {
+            window.setFrameOrigin(targetOrigin)
+            positionMessagePanel()
+            savePosition()
+            return
+        }
+
+        cancelLaunchGlide()
+        cancelCallMotion()
+        ttlWorkItem?.cancel()
+        let animation = PetCallMotion.animation(
+            from: currentOrigin,
+            to: targetOrigin,
+            fallback: directionalAnimation(from: nil)
+        )
+        switchDragDirection(to: animation)
+        callMotionTask = Task { [weak self] in
+            await self?.runCallMotion(from: currentOrigin, to: targetOrigin)
+        }
+    }
+
+    private func defaultWindowOrigin() -> CGPoint {
+        let defaultAnchor = PetWindowPositioning.initialPetAnchor(
+            storedPosition: nil,
+            legacyContentSize: legacyContentSize,
+            spriteSize: spriteSize,
+            stableSpriteBounds: stableSpriteBounds,
+            defaultWindowOrigin: PetWindowPositioning.defaultWindowOrigin(
+                contentSize: legacyContentSize,
+                visibleFrame: PetWindowPositioning.preferredVisibleFrame()
+            )
+        )
+        return PetWindowPositioning.windowOrigin(
+            preservingPetAnchor: defaultAnchor,
+            petFrame: petView.petAnchorFrame
+        )
+    }
+
     private func petAnchorInScreen() -> CGPoint {
         CGPoint(
             x: window.frame.origin.x + petView.petAnchorFrame.minX,
             y: window.frame.origin.y + petView.petAnchorFrame.minY
+        )
+    }
+
+    private func currentPetScreenFrame() -> CGRect {
+        PetWindowPositioning.screenFrame(
+            windowOrigin: window.frame.origin,
+            petFrame: petView.visibleSpriteFrame
         )
     }
 
@@ -595,6 +767,7 @@ private final class PetHostController {
 
     private func play(_ animation: PetAnimation, loopCount: Int?, ttlSeconds: Double?) {
         cancelLaunchGlide()
+        cancelCallMotion()
         ttlWorkItem?.cancel()
         currentAnimation = animation
         currentFrameIndex = entryFrame(for: animation)
@@ -617,6 +790,7 @@ private final class PetHostController {
     }
 
     private func handleDragEnd(releaseVelocity: CGVector, fallbackAnimation: PetAnimation?) {
+        cancelCallMotion()
         let fallbackAnimation = directionalAnimation(from: fallbackAnimation)
         guard PetLaunchMotion.shouldLaunch(velocity: releaseVelocity) else {
             savePosition()
@@ -676,6 +850,49 @@ private final class PetHostController {
         glideTimer?.invalidate()
         glideTimer = nil
         lastGlideUpdateTime = nil
+    }
+
+    private func runCallMotion(from origin: CGPoint, to targetOrigin: CGPoint) async {
+        let duration = PetCallMotion.duration(from: origin, to: targetOrigin)
+        let startTime = ProcessInfo.processInfo.systemUptime
+
+        while !Task.isCancelled {
+            let elapsed = ProcessInfo.processInfo.systemUptime - startTime
+            let progress = min(CGFloat(elapsed / duration), 1)
+            window.setFrameOrigin(PetCallMotion.origin(from: origin, to: targetOrigin, progress: progress))
+            positionMessagePanel()
+
+            guard progress < 1 else {
+                finishCallMotion(at: targetOrigin)
+                return
+            }
+
+            try? await Task.sleep(nanoseconds: PetCallMotion.frameIntervalNanoseconds)
+        }
+    }
+
+    private func finishCallMotion(at targetOrigin: CGPoint) {
+        callMotionTask = nil
+        window.setFrameOrigin(targetOrigin)
+        positionMessagePanel()
+        savePosition()
+        play(.idle, loop: true, ttlSeconds: nil)
+    }
+
+    private func cancelCallMotion() {
+        callMotionTask?.cancel()
+        callMotionTask = nil
+    }
+
+    private func recoverFromScreenChangeIfNeeded() {
+        guard !PetWindowPositioning.isVisible(
+            currentPetScreenFrame(),
+            in: PetWindowPositioning.activeVisibleFrames()
+        ) else {
+            return
+        }
+
+        callPet()
     }
 
     private func visibleFrameForGlide() -> CGRect {

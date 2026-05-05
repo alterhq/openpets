@@ -393,6 +393,88 @@ final class OpenPetsTests: XCTestCase {
     }
 
     @MainActor
+    func testDefaultWindowOriginUsesExplicitVisibleFrame() {
+        let origin = PetWindowPositioning.defaultWindowOrigin(
+            contentSize: CGSize(width: 316, height: 118),
+            visibleFrame: CGRect(x: 1_000, y: 200, width: 1_440, height: 900)
+        )
+
+        XCTAssertEqual(origin, CGPoint(x: 2_084, y: 240))
+    }
+
+    @MainActor
+    func testPreferredVisibleFrameUsesMenuBarFrameBeforeFallbacks() {
+        let menuBarFrame = CGRect(x: 500, y: 100, width: 900, height: 700)
+        let firstScreenFrame = CGRect(x: -900, y: 0, width: 900, height: 700)
+
+        XCTAssertEqual(
+            PetWindowPositioning.preferredVisibleFrame(
+                mainVisibleFrame: menuBarFrame,
+                screenVisibleFrames: [firstScreenFrame]
+            ),
+            menuBarFrame
+        )
+        XCTAssertEqual(
+            PetWindowPositioning.preferredVisibleFrame(
+                mainVisibleFrame: nil,
+                screenVisibleFrames: [firstScreenFrame]
+            ),
+            firstScreenFrame
+        )
+        XCTAssertEqual(
+            PetWindowPositioning.preferredVisibleFrame(
+                mainVisibleFrame: nil,
+                screenVisibleFrames: []
+            ),
+            PetWindowPositioning.fallbackVisibleFrame
+        )
+    }
+
+    @MainActor
+    func testInitialWindowOriginKeepsVisibleStoredPosition() {
+        let origin = PetWindowPositioning.initialWindowOrigin(
+            storedPosition: StoredPetPosition(CGPoint(x: 110, y: 210), kind: .petAnchor),
+            legacyContentSize: PetWindowPositioning.legacyContentSize(
+                spriteSize: CGSize(width: 20, height: 10),
+                messageAreaHeight: 108
+            ),
+            spriteSize: CGSize(width: 20, height: 10),
+            stableSpriteBounds: CGRect(x: 5, y: 2, width: 10, height: 6),
+            petFrame: CGRect(x: 0, y: 0, width: 10, height: 6),
+            preferredVisibleFrame: CGRect(x: 0, y: 0, width: 500, height: 500),
+            activeVisibleFrames: [CGRect(x: 0, y: 0, width: 500, height: 500)]
+        )
+
+        XCTAssertEqual(origin, CGPoint(x: 110, y: 210))
+    }
+
+    @MainActor
+    func testInitialWindowOriginRecoversOffscreenStoredPosition() {
+        let origin = PetWindowPositioning.initialWindowOrigin(
+            storedPosition: StoredPetPosition(CGPoint(x: 5_000, y: 210), kind: .petAnchor),
+            legacyContentSize: PetWindowPositioning.legacyContentSize(
+                spriteSize: CGSize(width: 20, height: 10),
+                messageAreaHeight: 108
+            ),
+            spriteSize: CGSize(width: 20, height: 10),
+            stableSpriteBounds: CGRect(x: 5, y: 2, width: 10, height: 6),
+            petFrame: CGRect(x: 0, y: 0, width: 10, height: 6),
+            preferredVisibleFrame: CGRect(x: 0, y: 0, width: 500, height: 500),
+            activeVisibleFrames: [CGRect(x: 0, y: 0, width: 500, height: 500)]
+        )
+
+        XCTAssertEqual(origin, CGPoint(x: 433, y: 42))
+    }
+
+    @MainActor
+    func testPetVisibilityRequiresIntersectionWithActiveScreen() {
+        let activeFrame = CGRect(x: 0, y: 0, width: 500, height: 500)
+
+        XCTAssertTrue(PetWindowPositioning.isVisible(CGRect(x: 490, y: 10, width: 20, height: 20), in: [activeFrame]))
+        XCTAssertFalse(PetWindowPositioning.isVisible(CGRect(x: 600, y: 10, width: 20, height: 20), in: [activeFrame]))
+    }
+
+    @MainActor
     func testPetHostViewOnlyHitsInteractivePixelsInsideMinimalFrame() throws {
         let image = try makeAlphaTestImage(width: 3, height: 1, alphas: [255, 0, 255])
         let view = PetHostView(
@@ -488,6 +570,18 @@ final class OpenPetsTests: XCTestCase {
 
         XCTAssertEqual(menuItemTitles(statusMenu), menuItemTitles(petContextMenu))
         XCTAssertNotNil(petContextMenu.items.first { $0.title.hasPrefix("Active Pet:") }?.submenu)
+    }
+
+    @MainActor
+    func testMenusIncludeCallMyPetNearWakePet() {
+        let controller = OpenPetsMenuBarController()
+        let menu = controller.makeStatusItemMenu()
+        let titles = menuItemTitles(menu)
+
+        XCTAssertEqual(
+            titles.firstIndex(of: "Call my pet"),
+            titles.firstIndex(of: "Wake Pet").map { $0 + 1 }
+        )
     }
 
     @MainActor
@@ -1688,6 +1782,49 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(leftStep.velocity.dx, 0)
         XCTAssertEqual(topStep.origin.y, 350)
         XCTAssertEqual(topStep.velocity.dy, 0)
+    }
+
+    func testPetCallMotionEasesTowardTarget() {
+        let origin = CGPoint(x: 0, y: 10)
+        let targetOrigin = CGPoint(x: 100, y: 50)
+
+        let halfway = PetCallMotion.origin(from: origin, to: targetOrigin, progress: 0.5)
+        let complete = PetCallMotion.origin(from: origin, to: targetOrigin, progress: 1)
+
+        XCTAssertGreaterThan(halfway.x, 50)
+        XCTAssertGreaterThan(halfway.y, 30)
+        XCTAssertEqual(complete, targetOrigin)
+    }
+
+    func testPetCallMotionSelectsRunningDirection() {
+        XCTAssertEqual(
+            PetCallMotion.animation(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 100, y: 0), fallback: .runningLeft),
+            .runningRight
+        )
+        XCTAssertEqual(
+            PetCallMotion.animation(from: CGPoint(x: 100, y: 0), to: CGPoint(x: 0, y: 0), fallback: .runningRight),
+            .runningLeft
+        )
+        XCTAssertEqual(
+            PetCallMotion.animation(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 0, y: 100), fallback: .runningLeft),
+            .runningLeft
+        )
+    }
+
+    @MainActor
+    func testCallTargetCanBeRecomputedForLatestVisibleFrame() {
+        let contentSize = CGSize(width: 316, height: 118)
+        let firstTarget = PetWindowPositioning.defaultWindowOrigin(
+            contentSize: contentSize,
+            visibleFrame: CGRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        let latestTarget = PetWindowPositioning.defaultWindowOrigin(
+            contentSize: contentSize,
+            visibleFrame: CGRect(x: 1_000, y: 200, width: 1_440, height: 900)
+        )
+
+        XCTAssertEqual(firstTarget, CGPoint(x: 444, y: 40))
+        XCTAssertEqual(latestTarget, CGPoint(x: 2_084, y: 240))
     }
 
     private func makeTemporaryDirectory() throws -> URL {
