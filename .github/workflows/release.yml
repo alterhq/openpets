@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve release metadata
         env:
@@ -55,15 +57,14 @@ jobs:
             echo "OPENPETS_RELEASE_DOWNLOAD_URL_PREFIX=https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/"
           } >> "$GITHUB_ENV"
 
-          {
-            echo "OPENPETS_RELEASE_NOTES<<EOF"
-            if [[ -n "$INPUT_RELEASE_NOTES" ]]; then
+          if [[ -n "$INPUT_RELEASE_NOTES" ]]; then
+            NOTES_DELIMITER="OPENPETS_RELEASE_NOTES_$(uuidgen | tr -d '-')"
+            {
+              echo "OPENPETS_RELEASE_NOTES<<$NOTES_DELIMITER"
               printf '%s\n' "$INPUT_RELEASE_NOTES"
-            else
-              printf 'OpenPets %s\n' "$VERSION"
-            fi
-            echo "EOF"
-          } >> "$GITHUB_ENV"
+              echo "$NOTES_DELIMITER"
+            } >> "$GITHUB_ENV"
+          fi
 
       - name: Install the Apple certificate
         env:
@@ -130,6 +131,16 @@ jobs:
           ! grep -q "REPLACE_WITH_SPARKLE_EDDSA_PUBLIC_KEY" ".build/release-package/OpenPets.app/Contents/Info.plist"
           grep -q "github.com/${GITHUB_REPOSITORY}/releases/download/${OPENPETS_RELEASE_TAG}" ".build/release-artifacts/appcast.xml"
           grep -q "sparkle:edSignature" ".build/release-artifacts/appcast.xml"
+          grep -q 'sparkle:format="markdown"' ".build/release-artifacts/appcast.xml"
+          python3 - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          tree = ET.parse(".build/release-artifacts/appcast.xml")
+          description = tree.find("./channel/item/description")
+          if description is None or not (description.text or "").strip():
+              sys.exit("Sparkle appcast is missing embedded release notes.")
+          PY
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2

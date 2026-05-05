@@ -72,13 +72,56 @@ has_notary_credentials() {
   [[ -n "$NOTARY_PROFILE" ]] || [[ -n "$APPLE_ID" && -n "$TEAM_ID" && -n "$NOTARIZATION_PASSWORD" ]]
 }
 
+release_notes_from_commits() {
+  local previous_tag=""
+  local release_commit="HEAD"
+  local commit_range="HEAD"
+  local changes=""
+
+  if ! git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf 'OpenPets %s\n' "$VERSION"
+    return
+  fi
+
+  if git -C "$ROOT" rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+    release_commit="$(git -C "$ROOT" rev-list -n 1 "$RELEASE_TAG")"
+    previous_tag="$(git -C "$ROOT" describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "$release_commit^" 2>/dev/null || true)"
+    commit_range="$release_commit"
+  else
+    previous_tag="$(git -C "$ROOT" describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' HEAD 2>/dev/null || true)"
+  fi
+
+  if [[ -n "$previous_tag" ]]; then
+    commit_range="$previous_tag..$release_commit"
+  fi
+
+  changes="$(git -C "$ROOT" log --reverse --no-merges --pretty=format:'- %s (%h)' "$commit_range" 2>/dev/null || true)"
+  printf 'OpenPets %s\n' "$VERSION"
+  if [[ -n "$previous_tag" ]]; then
+    printf '\nChanges since %s:\n' "$previous_tag"
+  else
+    printf '\nChanges:\n'
+  fi
+  if [[ -n "$changes" ]]; then
+    printf '%s\n' "$changes"
+  else
+    printf -- '- No code changes since the previous release.\n'
+  fi
+}
+
 release_notes_path() {
   local notes_path="$APPCAST_DIR/OpenPets-$VERSION.md"
 
-  if [[ -n "${OPENPETS_RELEASE_NOTES_FILE:-}" && -f "$OPENPETS_RELEASE_NOTES_FILE" ]]; then
+  if [[ -n "${OPENPETS_RELEASE_NOTES_FILE:-}" ]]; then
+    if [[ ! -f "$OPENPETS_RELEASE_NOTES_FILE" ]]; then
+      echo "OPENPETS_RELEASE_NOTES_FILE does not exist: $OPENPETS_RELEASE_NOTES_FILE" >&2
+      exit 1
+    fi
     cp "$OPENPETS_RELEASE_NOTES_FILE" "$notes_path"
   elif [[ -n "${OPENPETS_RELEASE_NOTES:-}" ]]; then
     printf '%s\n' "$OPENPETS_RELEASE_NOTES" > "$notes_path"
+  else
+    release_notes_from_commits > "$notes_path"
   fi
 }
 
@@ -210,11 +253,13 @@ if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
   echo "$SPARKLE_PRIVATE_KEY" | "$ARM64_BUILD_DIR/artifacts/sparkle/Sparkle/bin/generate_appcast" \
     --ed-key-file - \
     --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
+    --embed-release-notes \
     --link "https://github.com/alterhq/openpets" \
     "$APPCAST_DIR"
 elif [[ "${OPENPETS_GENERATE_UNSIGNED_APPCAST:-0}" == "1" ]]; then
   "$ARM64_BUILD_DIR/artifacts/sparkle/Sparkle/bin/generate_appcast" \
     --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
+    --embed-release-notes \
     --link "https://github.com/alterhq/openpets" \
     "$APPCAST_DIR"
 fi
