@@ -46,6 +46,32 @@ public struct OpenPetsInstallResult: Equatable, Sendable {
     }
 }
 
+public struct OpenPetsPreparedInstall: Equatable, Sendable {
+    public var petID: String
+    public var displayName: String
+    public var description: String
+    public var bundleURL: URL
+    public var stagingDirectoryURL: URL
+
+    public init(
+        petID: String,
+        displayName: String,
+        description: String,
+        bundleURL: URL,
+        stagingDirectoryURL: URL
+    ) {
+        self.petID = petID
+        self.displayName = displayName
+        self.description = description
+        self.bundleURL = bundleURL
+        self.stagingDirectoryURL = stagingDirectoryURL
+    }
+
+    public func cleanup() {
+        try? FileManager.default.removeItem(at: stagingDirectoryURL)
+    }
+}
+
 public struct OpenPetsInstallRequest: Equatable, Sendable {
     public var downloadURL: URL
     public var requestedPetID: String?
@@ -127,30 +153,55 @@ public struct OpenPetsPetInstaller: Sendable {
 
     @discardableResult
     public func install(source: String, activate: Bool = true) throws -> OpenPetsInstallResult {
-        try install(request: OpenPetsInstallRequest.parse(source), activate: activate)
+        let preparedInstall = try prepare(source: source)
+        defer { preparedInstall.cleanup() }
+        return try install(prepared: preparedInstall, activate: activate)
     }
 
     @discardableResult
     public func install(request: OpenPetsInstallRequest, activate: Bool = true) throws -> OpenPetsInstallResult {
+        let preparedInstall = try prepare(request: request)
+        defer { preparedInstall.cleanup() }
+        return try install(prepared: preparedInstall, activate: activate)
+    }
+
+    public func prepare(source: String) throws -> OpenPetsPreparedInstall {
+        try prepare(request: OpenPetsInstallRequest.parse(source))
+    }
+
+    public func prepare(request: OpenPetsInstallRequest) throws -> OpenPetsPreparedInstall {
         let workDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("openpets-install-\(UUID().uuidString)", isDirectory: true)
         let archiveURL = workDirectory.appendingPathComponent("pet.zip")
         let extractURL = workDirectory.appendingPathComponent("extracted", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: workDirectory) }
 
-        try FileManager.default.createDirectory(at: extractURL, withIntermediateDirectories: true)
-        try download(from: request.downloadURL, to: archiveURL)
-        try validateZipEntries(archiveURL)
-        try extractZip(archiveURL, to: extractURL)
+        do {
+            try FileManager.default.createDirectory(at: extractURL, withIntermediateDirectories: true)
+            try download(from: request.downloadURL, to: archiveURL)
+            try validateZipEntries(archiveURL)
+            try extractZip(archiveURL, to: extractURL)
 
-        let bundleURL = try locatePetBundle(in: extractURL)
-        let bundle = try PetBundle.load(from: bundleURL)
-        guard Self.isValidPetID(bundle.manifest.id) else {
-            throw OpenPetsInstallError.invalidPetID(bundle.manifest.id)
+            let bundleURL = try locatePetBundle(in: extractURL)
+            let bundle = try PetBundle.load(from: bundleURL)
+            try validate(bundle: bundle, requestedPetID: request.requestedPetID)
+
+            return OpenPetsPreparedInstall(
+                petID: bundle.manifest.id,
+                displayName: bundle.manifest.displayName,
+                description: bundle.manifest.description,
+                bundleURL: bundleURL,
+                stagingDirectoryURL: workDirectory
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: workDirectory)
+            throw error
         }
-        if let requestedPetID = request.requestedPetID, !requestedPetID.isEmpty, requestedPetID != bundle.manifest.id {
-            throw OpenPetsInstallError.invalidPetID("\(bundle.manifest.id) does not match requested id \(requestedPetID)")
-        }
+    }
+
+    @discardableResult
+    public func install(prepared preparedInstall: OpenPetsPreparedInstall, activate: Bool = true) throws -> OpenPetsInstallResult {
+        let bundle = try PetBundle.load(from: preparedInstall.bundleURL)
+        try validate(bundle: bundle, requestedPetID: preparedInstall.petID)
 
         try FileManager.default.createDirectory(at: installedPetsDirectory, withIntermediateDirectories: true)
         let destinationURL = installedPetsDirectory.appendingPathComponent(bundle.manifest.id, isDirectory: true)
@@ -158,7 +209,7 @@ public struct OpenPetsPetInstaller: Sendable {
         if FileManager.default.fileExists(atPath: replacementURL.path) {
             try FileManager.default.removeItem(at: replacementURL)
         }
-        try FileManager.default.copyItem(at: bundleURL, to: replacementURL)
+        try FileManager.default.copyItem(at: preparedInstall.bundleURL, to: replacementURL)
         if FileManager.default.fileExists(atPath: destinationURL.path) {
             try FileManager.default.removeItem(at: destinationURL)
         }
@@ -237,6 +288,15 @@ public struct OpenPetsPetInstaller: Sendable {
         }
 
         throw OpenPetsInstallError.noPetBundleFound(directoryURL)
+    }
+
+    private func validate(bundle: PetBundle, requestedPetID: String?) throws {
+        guard Self.isValidPetID(bundle.manifest.id) else {
+            throw OpenPetsInstallError.invalidPetID(bundle.manifest.id)
+        }
+        if let requestedPetID, !requestedPetID.isEmpty, requestedPetID != bundle.manifest.id {
+            throw OpenPetsInstallError.invalidPetID("\(bundle.manifest.id) does not match requested id \(requestedPetID)")
+        }
     }
 
     private func runProcess(_ executable: String, arguments: [String]) throws -> String {

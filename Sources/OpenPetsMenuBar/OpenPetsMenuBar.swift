@@ -53,6 +53,7 @@ private final class OpenPetsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
             forEventClass: AEEventClass(kInternetEventClass),
             andEventID: AEEventID(kAEGetURL)
         )
+        controller.cleanupInstallPreview()
         controller.stopPet()
         controller.stopMCPServer()
     }
@@ -112,9 +113,12 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     private var configuration = OpenPetsConfiguration()
     private var petSession: OpenPetsHostSession?
     private var mcpApp: OpenPetsMCPHTTPApp?
-    private var agentOnboardingController: OpenPetsAgentOnboardingWindowController?
     private var mcpTask: Task<Void, Never>?
     private var mcpState = MCPState.stopped
+    private var installPreviewController: OpenPetsInstallPreviewWindowController?
+    private var pendingPreparedInstall: OpenPetsPreparedInstall?
+    private var activeInstallRequestID: UUID?
+    private var agentOnboardingController: OpenPetsAgentOnboardingWindowController?
 
     private lazy var startStopServerItem = NSMenuItem(
         title: "Start MCP Server",
@@ -482,33 +486,36 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     #endif
 
     func installPet(from url: URL) {
+        let requestID = UUID()
+        activeInstallRequestID = requestID
+        cleanupInstallPreview(resetActiveRequest: false)
+
         Task {
             do {
-                let result = try await Task.detached {
-                    try OpenPetsPetInstaller().install(source: url.absoluteString)
+                let preparedInstall = try await Task.detached {
+                    try OpenPetsPetInstaller().prepare(source: url.absoluteString)
                 }.value
                 await MainActor.run {
-                    self.configuration.activePetID = result.petID
-                    let shouldRestart = self.petSession?.isRunning == true
-                    if shouldRestart {
-                        self.stopPet()
-                        do {
-                            try self.wakePet()
-                        } catch {
-                            self.showError("Installed pet, but could not wake it", detail: error.localizedDescription)
-                            return
-                        }
+                    guard self.activeInstallRequestID == requestID else {
+                        preparedInstall.cleanup()
+                        return
                     }
-                    self.refreshMenu()
-                    self.showInfo("Installed \(result.displayName)", detail: result.activated ? "This pet is now active." : "The pet was installed.")
+                    self.showInstallPreview(for: preparedInstall)
                 }
             } catch {
                 await MainActor.run {
+                    guard self.activeInstallRequestID == requestID else { return }
+                    self.activeInstallRequestID = nil
                     self.showError("Could not install pet", detail: error.localizedDescription)
                 }
             }
         }
     }
+
+    func cleanupInstallPreview() {
+        cleanupInstallPreview(resetActiveRequest: true)
+    }
+
     func showAgentOnboarding() {
         reloadConfiguration()
         let controller = agentOnboardingController ?? OpenPetsAgentOnboardingWindowController(mcpURLProvider: { [weak self] in
@@ -521,6 +528,105 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    private func cleanupInstallPreview(resetActiveRequest: Bool) {
+        if resetActiveRequest {
+            activeInstallRequestID = nil
+        }
+        let previewController = installPreviewController
+        let preparedInstall = pendingPreparedInstall
+        installPreviewController = nil
+        pendingPreparedInstall = nil
+        previewController?.close()
+        preparedInstall?.cleanup()
+    }
+
+    private func showInstallPreview(for preparedInstall: OpenPetsPreparedInstall) {
+        cleanupInstallPreview(resetActiveRequest: false)
+        pendingPreparedInstall = preparedInstall
+
+        let controller = OpenPetsInstallPreviewWindowController(preparedInstall: preparedInstall) { [weak self] action in
+            self?.handleInstallPreview(action, preparedInstall: preparedInstall)
+        }
+        installPreviewController = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    private func handleInstallPreview(
+        _ action: OpenPetsInstallPreviewWindowController.Action,
+        preparedInstall: OpenPetsPreparedInstall
+    ) {
+        guard pendingPreparedInstall == preparedInstall else {
+            if action == .cancel {
+                installPreviewController = nil
+            }
+            preparedInstall.cleanup()
+            return
+        }
+
+        switch action {
+        case .cancel:
+            installPreviewController = nil
+            pendingPreparedInstall = nil
+            activeInstallRequestID = nil
+            preparedInstall.cleanup()
+        case .install:
+            pendingPreparedInstall = nil
+            activeInstallRequestID = nil
+            installPreviewController?.setInstalling()
+            commitPreparedInstall(preparedInstall)
+        }
+    }
+
+    private func commitPreparedInstall(_ preparedInstall: OpenPetsPreparedInstall) {
+        Task {
+            do {
+                let result = try await Task.detached {
+                    defer { preparedInstall.cleanup() }
+                    return try OpenPetsPetInstaller().install(prepared: preparedInstall, activate: true)
+                }.value
+                await MainActor.run {
+                    self.configuration.activePetID = result.petID
+                    if self.petSession?.isRunning == true {
+                        self.stopPet()
+                    }
+                    do {
+                        try self.wakePet()
+                    } catch {
+                        self.showInstallError("Installed pet, but could not load it: \(error.localizedDescription)")
+                        return
+                    }
+                    self.refreshMenu()
+                    self.finishInstallPreview()
+                }
+            } catch {
+                preparedInstall.cleanup()
+                await MainActor.run {
+                    self.showInstallError("Could not install pet: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func finishInstallPreview() {
+        let previewController = installPreviewController
+        installPreviewController = nil
+        pendingPreparedInstall = nil
+        activeInstallRequestID = nil
+        previewController?.finishAndClose()
+    }
+
+    private func showInstallError(_ message: String) {
+        pendingPreparedInstall = nil
+        activeInstallRequestID = nil
+        if let installPreviewController {
+            installPreviewController.showError(message)
+        } else {
+            showError("Could not install pet", detail: message)
+        }
     }
 
     func startMCPServer() {

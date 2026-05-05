@@ -787,6 +787,16 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(bundle.manifest.displayName, "Starcorn")
     }
 
+    func testPetPreviewRendererCropsIdleFrame() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try makePetBundle(id: "preview-renderer-pet", at: directory)
+
+        let image = try OpenPetsPetPreviewRenderer.idleImage(from: directory, scale: 0.5)
+
+        XCTAssertEqual(image.size, CGSize(width: 96, height: 104))
+    }
+
     func testPetLibraryDiscoversInstalledAndKnownUserPetDirectories() throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -859,6 +869,94 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(try OpenPetsConfiguration.load(from: configURL).activePetID, "test-pet")
     }
 
+    func testPetInstallerInstallSourceCanSkipActivation() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceBundle = root.appendingPathComponent("inactive-pet", isDirectory: true)
+        let archiveURL = root.appendingPathComponent("inactive-pet.zip")
+        let installedURL = root.appendingPathComponent("Installed", isDirectory: true)
+        let configURL = root.appendingPathComponent("config/config.json")
+        try makePetBundle(id: "inactive-pet", at: sourceBundle)
+        try zipDirectory(sourceBundle, to: archiveURL)
+
+        let result = try OpenPetsPetInstaller(
+            installedPetsDirectory: installedURL,
+            configurationURL: configURL
+        ).install(source: archiveURL.path, activate: false)
+
+        XCTAssertEqual(result.petID, "inactive-pet")
+        XCTAssertFalse(result.activated)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: installedURL.appendingPathComponent("inactive-pet/pet.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: configURL.path))
+    }
+
+    func testPetInstallerPreparesWithoutInstallingOrActivating() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceBundle = root.appendingPathComponent("preview-pet", isDirectory: true)
+        let archiveURL = root.appendingPathComponent("preview-pet.zip")
+        let installedURL = root.appendingPathComponent("Installed", isDirectory: true)
+        let configURL = root.appendingPathComponent("config/config.json")
+        try makePetBundle(id: "preview-pet", at: sourceBundle)
+        try zipDirectory(sourceBundle, to: archiveURL)
+
+        let preparedInstall = try OpenPetsPetInstaller(
+            installedPetsDirectory: installedURL,
+            configurationURL: configURL
+        ).prepare(request: OpenPetsInstallRequest(downloadURL: archiveURL, requestedPetID: "preview-pet"))
+
+        XCTAssertEqual(preparedInstall.petID, "preview-pet")
+        XCTAssertEqual(preparedInstall.displayName, "Test Pet")
+        XCTAssertEqual(preparedInstall.description, "Installed test pet.")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: preparedInstall.bundleURL.appendingPathComponent("pet.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: installedURL.appendingPathComponent("preview-pet/pet.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: configURL.path))
+
+        preparedInstall.cleanup()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: preparedInstall.stagingDirectoryURL.path))
+    }
+
+    func testPetInstallerCommitsPreparedInstallAndActivates() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceBundle = root.appendingPathComponent("prepared-pet", isDirectory: true)
+        let archiveURL = root.appendingPathComponent("prepared-pet.zip")
+        let installedURL = root.appendingPathComponent("Installed", isDirectory: true)
+        let configURL = root.appendingPathComponent("config/config.json")
+        try makePetBundle(id: "prepared-pet", at: sourceBundle)
+        try zipDirectory(sourceBundle, to: archiveURL)
+        let installer = OpenPetsPetInstaller(installedPetsDirectory: installedURL, configurationURL: configURL)
+        let preparedInstall = try installer.prepare(
+            request: OpenPetsInstallRequest(downloadURL: archiveURL, requestedPetID: "prepared-pet")
+        )
+        defer { preparedInstall.cleanup() }
+
+        let result = try installer.install(prepared: preparedInstall, activate: true)
+
+        XCTAssertEqual(result.petID, "prepared-pet")
+        XCTAssertEqual(result.displayName, "Test Pet")
+        XCTAssertTrue(result.activated)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: installedURL.appendingPathComponent("prepared-pet/pet.json").path))
+        XCTAssertEqual(try OpenPetsConfiguration.load(from: configURL).activePetID, "prepared-pet")
+    }
+
+    func testPetInstallerPrepareRejectsRequestedIDMismatch() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceBundle = root.appendingPathComponent("actual-pet", isDirectory: true)
+        let archiveURL = root.appendingPathComponent("actual-pet.zip")
+        try makePetBundle(id: "actual-pet", at: sourceBundle)
+        try zipDirectory(sourceBundle, to: archiveURL)
+
+        XCTAssertThrowsError(try OpenPetsPetInstaller(
+            installedPetsDirectory: root.appendingPathComponent("Installed", isDirectory: true),
+            configurationURL: root.appendingPathComponent("config.json")
+        ).prepare(request: OpenPetsInstallRequest(downloadURL: archiveURL, requestedPetID: "expected-pet"))) { error in
+            XCTAssertEqual(error as? OpenPetsInstallError, .invalidPetID("actual-pet does not match requested id expected-pet"))
+        }
+    }
+
     func testPetInstallerRejectsUnsafeArchiveEntry() throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -872,6 +970,23 @@ final class OpenPetsTests: XCTestCase {
             installedPetsDirectory: root.appendingPathComponent("Installed", isDirectory: true),
             configurationURL: root.appendingPathComponent("config.json")
         ).install(request: OpenPetsInstallRequest(downloadURL: archiveURL))) { error in
+            XCTAssertEqual(error as? OpenPetsInstallError, .unsafeArchiveEntry("../evil.txt"))
+        }
+    }
+
+    func testPetInstallerPrepareRejectsUnsafeArchiveEntry() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent("work", isDirectory: true)
+        let archiveURL = root.appendingPathComponent("unsafe.zip")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try Data("unsafe".utf8).write(to: root.appendingPathComponent("evil.txt"))
+        _ = try runProcess("/usr/bin/zip", arguments: ["-q", archiveURL.path, "../evil.txt"], workingDirectory: work)
+
+        XCTAssertThrowsError(try OpenPetsPetInstaller(
+            installedPetsDirectory: root.appendingPathComponent("Installed", isDirectory: true),
+            configurationURL: root.appendingPathComponent("config.json")
+        ).prepare(request: OpenPetsInstallRequest(downloadURL: archiveURL))) { error in
             XCTAssertEqual(error as? OpenPetsInstallError, .unsafeArchiveEntry("../evil.txt"))
         }
     }
