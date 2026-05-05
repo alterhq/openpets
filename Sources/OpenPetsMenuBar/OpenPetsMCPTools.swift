@@ -116,6 +116,12 @@ func openPetsTools() -> [Tool] {
             )
         ),
         Tool(
+            name: "stop_pet_animation",
+            description: "Stop the current OpenPets animation and return the visible pet to idle without stopping, hiding, or clearing pet messages. Use stop_pet only when the user asks to hide, quit, stop, or dismiss the pet.",
+            inputSchema: objectSchema(),
+            annotations: .init(destructiveHint: false, idempotentHint: true)
+        ),
+        Tool(
             name: "clear_pet_message",
             description: "Clear one OpenPets message bubble by threadId without stopping the pet. Use this only when a specific task's bubble is no longer relevant; do not clear another task or agent's threadId.",
             inputSchema: objectSchema(
@@ -187,6 +193,9 @@ private func callOpenPetsTool(
                 loop: arguments["loop"]?.boolValue,
                 ttlSeconds: number(arguments["ttlSeconds"])
             )))
+
+        case "stop_pet_animation":
+            return await commandResult(controller.sendPetCommand(.stopAnimation))
 
         case "clear_pet_message":
             guard let threadId = arguments["threadId"]?.stringValue, !threadId.isEmpty else {

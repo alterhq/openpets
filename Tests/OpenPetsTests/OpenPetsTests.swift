@@ -593,6 +593,8 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(descriptions["notify"]).contains("automatically wakes the pet"))
         XCTAssertTrue(try XCTUnwrap(descriptions["notify"]).contains("returns the current OpenPets status"))
         XCTAssertTrue(try XCTUnwrap(descriptions["play_pet_animation"]).contains("Use notify instead"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["stop_pet_animation"]).contains("return the visible pet to idle"))
+        XCTAssertTrue(try XCTUnwrap(descriptions["stop_pet_animation"]).contains("without stopping, hiding, or clearing pet messages"))
         XCTAssertTrue(try XCTUnwrap(descriptions["clear_pet_message"]).contains("by threadId"))
         XCTAssertTrue(try XCTUnwrap(descriptions["clear_pet_message"]).contains("do not clear another task"))
         XCTAssertTrue(try XCTUnwrap(descriptions["ping_pet"]).contains("connectivity check"))
@@ -697,6 +699,12 @@ final class OpenPetsTests: XCTestCase {
         }
         XCTAssertTrue(description.contains("runningRight"))
         XCTAssertTrue(description.contains("runningLeft"))
+    }
+
+    func testMCPStopAnimationSchemaHasNoRequiredArguments() throws {
+        let required = try schemaRequired(toolName: "stop_pet_animation")
+
+        XCTAssertTrue(required.isEmpty)
     }
 
     func testMessageStatusDoesNotUseProgressIndicator() {
@@ -1003,6 +1011,7 @@ final class OpenPetsTests: XCTestCase {
                 ttlSeconds: 30
             )),
             .playAnimation(name: .waving, loop: false, ttlSeconds: 1),
+            .stopAnimation,
             .clearMessage(threadId: "11111111-1111-4111-8111-111111111111"),
             .ping,
             .shutdown

@@ -141,13 +141,19 @@ Play an animation:
 swift run openpets animate waving --once
 ```
 
+Stop the current animation and return the pet to idle without clearing messages:
+
+```sh
+swift run openpets stop-animation
+```
+
 Check connectivity:
 
 ```sh
 swift run openpets ping
 ```
 
-Clear one message bubble or stop the pet:
+Clear one message bubble or stop the pet process:
 
 ```sh
 swift run openpets clear --thread THREAD_ID
@@ -167,6 +173,7 @@ OpenPets exposes these MCP tools from the menu bar app:
 | `stop_pet` | Stop the desktop pet. |
 | `notify` | Show or update a threaded message bubble with a status-driven animation. |
 | `play_pet_animation` | Play an animation without showing text. |
+| `stop_pet_animation` | Return the pet to idle without stopping it or clearing messages. |
 | `clear_pet_message` | Clear one message bubble by `threadId`. |
 | `ping_pet` | Confirm the pet process can receive commands. |
 

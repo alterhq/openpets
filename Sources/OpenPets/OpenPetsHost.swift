@@ -535,6 +535,8 @@ private final class PetHostController {
             }
         case .playAnimation(let name, let loop, let ttlSeconds):
             play(name, loop: loop ?? true, ttlSeconds: ttlSeconds)
+        case .stopAnimation:
+            stopAnimation()
         case .clearMessage(let threadId):
             clearBubble(threadId: threadId)
         case .ping, .shutdown:
@@ -608,6 +610,10 @@ private final class PetHostController {
         }
         ttlWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + ttlSeconds, execute: workItem)
+    }
+
+    private func stopAnimation() {
+        play(.idle, loop: true, ttlSeconds: nil)
     }
 
     private func handleDragEnd(releaseVelocity: CGVector, fallbackAnimation: PetAnimation?) {

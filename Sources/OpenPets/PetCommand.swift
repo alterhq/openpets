@@ -53,6 +53,7 @@ public extension PetNotification {
 public enum PetCommand: Equatable, Sendable {
     case notify(PetNotification)
     case playAnimation(name: PetAnimation, loop: Bool?, ttlSeconds: Double?)
+    case stopAnimation
     case clearMessage(threadId: String)
     case ping
     case shutdown
@@ -71,6 +72,7 @@ extension PetCommand: Codable {
     private enum CommandType: String, Codable {
         case notify
         case playAnimation
+        case stopAnimation
         case clearMessage
         case ping
         case shutdown
@@ -89,6 +91,8 @@ extension PetCommand: Codable {
                 loop: try container.decodeIfPresent(Bool.self, forKey: .loop),
                 ttlSeconds: try container.decodeIfPresent(Double.self, forKey: .ttlSeconds)
             )
+        case .stopAnimation:
+            self = .stopAnimation
         case .clearMessage:
             self = .clearMessage(threadId: try container.decode(String.self, forKey: .threadId))
         case .ping:
@@ -110,6 +114,8 @@ extension PetCommand: Codable {
             try container.encode(name, forKey: .name)
             try container.encodeIfPresent(loop, forKey: .loop)
             try container.encodeIfPresent(ttlSeconds, forKey: .ttlSeconds)
+        case .stopAnimation:
+            try container.encode(CommandType.stopAnimation, forKey: .type)
         case .clearMessage(let threadId):
             try container.encode(CommandType.clearMessage, forKey: .type)
             try container.encode(threadId, forKey: .threadId)

@@ -8,7 +8,7 @@ The default setup has three layers:
 
 1. The menu bar app owns the visible pet session.
 2. The MCP server runs inside the menu bar app and sends tool calls to that pet session.
-3. Socket clients, including CLI commands such as `notify`, `animate`, `clear`, `ping`, and Swift apps using `OpenPetsClient`, connect to the pet session through the configured Unix socket.
+3. Socket clients, including CLI commands such as `notify`, `animate`, `stop-animation`, `clear`, `ping`, and Swift apps using `OpenPetsClient`, connect to the pet session through the configured Unix socket.
 
 ```text
 MCP clients
@@ -84,6 +84,8 @@ if client.isPetRunning() {
     // Start or prompt for the user's preferred OpenPets host.
 }
 ```
+
+To stop only the current animation and return the pet to idle without clearing messages or stopping the host, send `.stopAnimation`. Use `.shutdown` or `stop_pet` only when the user explicitly wants the pet process hidden or stopped.
 
 Then reuse the returned `threadId` when updating the same operation:
 
