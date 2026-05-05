@@ -1491,6 +1491,128 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertTrue(runner.recordedInvocations.isEmpty)
     }
 
+    func testAgentDetectorFindsConfiguredOpenCodeMCP() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let openCodeURL = try makeExecutable(named: "opencode", in: directory)
+        let openCodeConfigURL = directory.appendingPathComponent(".config/opencode/opencode.json")
+        let mcpURL = "http://127.0.0.1:3010/mcp"
+        try writeOpenCodeConfig(to: openCodeConfigURL, mcpURL: mcpURL)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            openCodeConfigurationURL: openCodeConfigURL
+        ).detect(.openCode, mcpURL: mcpURL)
+
+        XCTAssertEqual(detection.state, .configured)
+        XCTAssertEqual(detection.executableURL?.path, openCodeURL.path)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
+    func testAgentDetectorReportsDifferentConfiguredOpenCodeURL() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try makeExecutable(named: "opencode", in: directory)
+        let openCodeConfigURL = directory.appendingPathComponent(".config/opencode/opencode.json")
+        try writeOpenCodeConfig(to: openCodeConfigURL, mcpURL: "http://127.0.0.1:3001/mcp")
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            openCodeConfigurationURL: openCodeConfigURL
+        ).detect(.openCode, mcpURL: "http://127.0.0.1:3010/mcp")
+
+        XCTAssertEqual(detection.state, .configuredDifferentURL)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
+    func testAgentDetectorReportsDisabledOpenCodeMCPAsUpdateNeeded() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try makeExecutable(named: "opencode", in: directory)
+        let openCodeConfigURL = directory.appendingPathComponent(".config/opencode/opencode.json")
+        let mcpURL = "http://127.0.0.1:3010/mcp"
+        try writeOpenCodeConfig(to: openCodeConfigURL, mcpURL: mcpURL, enabled: false)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            openCodeConfigurationURL: openCodeConfigURL
+        ).detect(.openCode, mcpURL: mcpURL)
+
+        XCTAssertEqual(detection.state, .configuredDifferentURL)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
+    func testAgentDetectorReadsOpenCodeJSONCConfig() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try makeExecutable(named: "opencode", in: directory)
+        let openCodeConfigURL = directory.appendingPathComponent(".config/opencode/opencode.json")
+        let mcpURL = "http://127.0.0.1:3010/mcp"
+        try writeOpenCodeJSONCConfig(to: openCodeConfigURL, mcpURL: mcpURL)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            openCodeConfigurationURL: openCodeConfigURL
+        ).detect(.openCode, mcpURL: mcpURL)
+
+        XCTAssertEqual(detection.state, .configured)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
+    func testAgentDetectorFindsOpenCodeJSONCConfigFile() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try makeExecutable(named: "opencode", in: directory)
+        let openCodeJSONURL = directory.appendingPathComponent(".config/opencode/opencode.json")
+        let openCodeJSONCURL = directory.appendingPathComponent(".config/opencode/opencode.jsonc")
+        let mcpURL = "http://127.0.0.1:3010/mcp"
+        try writeOpenCodeJSONCConfig(to: openCodeJSONCURL, mcpURL: mcpURL)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            openCodeConfigurationURL: openCodeJSONURL
+        ).detect(.openCode, mcpURL: mcpURL)
+
+        XCTAssertEqual(detection.state, .configured)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: openCodeJSONURL.path))
+    }
+
+    func testAgentDetectorPrefersOpenCodeJSONCConfigFile() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try makeExecutable(named: "opencode", in: directory)
+        let openCodeJSONURL = directory.appendingPathComponent(".config/opencode/opencode.json")
+        let openCodeJSONCURL = directory.appendingPathComponent(".config/opencode/opencode.jsonc")
+        let mcpURL = "http://127.0.0.1:3010/mcp"
+        try writeOpenCodeConfig(to: openCodeJSONURL, mcpURL: mcpURL, enabled: false)
+        try writeOpenCodeJSONCConfig(to: openCodeJSONCURL, mcpURL: mcpURL)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            openCodeConfigurationURL: openCodeJSONURL
+        ).detect(.openCode, mcpURL: mcpURL)
+
+        XCTAssertEqual(detection.state, .configured)
+    }
+
     func testAgentDetectorUsesNonInteractiveShellOnlyAfterFastPathMissesTool() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1527,6 +1649,16 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(detection.state, .installed)
         XCTAssertEqual(detection.executableURL?.path, executableURL.path)
         XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
+    func testAgentDetectorIncludesOpenCodeInstallDirectoryInDefaultSearchDirectories() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let expectedURL = directory.appendingPathComponent(".opencode/bin", isDirectory: true)
+
+        let searchDirectories = OpenPetsAgentDetector.defaultSearchDirectories(homeDirectoryURL: directory)
+
+        XCTAssertTrue(searchDirectories.contains { $0.standardizedFileURL.path == expectedURL.standardizedFileURL.path })
     }
 
     func testAgentDetectorReportsSetupPathAvailability() throws {
@@ -1573,6 +1705,14 @@ final class OpenPetsTests: XCTestCase {
             ).arguments,
             ["install", "npm:pi-mcp-extension"]
         )
+        XCTAssertEqual(
+            installer.command(
+                kind: .openCode,
+                executableURL: URL(fileURLWithPath: "/usr/local/bin/opencode"),
+                mcpURL: mcpURL
+            ).arguments,
+            []
+        )
     }
 
     func testAgentSetupInstallerBuildsUninstallCommands() {
@@ -1596,6 +1736,13 @@ final class OpenPetsTests: XCTestCase {
             installer.uninstallCommand(
                 kind: .pi,
                 executableURL: URL(fileURLWithPath: "/usr/local/bin/pi")
+            ).arguments,
+            []
+        )
+        XCTAssertEqual(
+            installer.uninstallCommand(
+                kind: .openCode,
+                executableURL: URL(fileURLWithPath: "/usr/local/bin/opencode")
             ).arguments,
             []
         )
@@ -1657,8 +1804,102 @@ final class OpenPetsTests: XCTestCase {
         )
 
         XCTAssertTrue(result.succeeded)
-        let configuredURL = try mcpServerURL(in: configURL, name: "openpets")
+        let configuredURL = try mcpServerURL(in: configURL, sectionKey: "mcpServers", name: "openpets")
         XCTAssertEqual(configuredURL, "http://127.0.0.1:3010/mcp")
+    }
+
+    func testAgentSetupInstallerWritesOpenCodeMCPConfig() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent(".config/opencode/opencode.json")
+        try writeOpenCodeConfig(to: configURL, mcpURL: "http://127.0.0.1:3001/mcp")
+        let installer = OpenPetsAgentSetupInstaller(
+            processRunner: FakeProcessRunner(responses: [:]),
+            openCodeConfigurationURL: configURL
+        )
+
+        let result = try installer.install(
+            kind: .openCode,
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/opencode"),
+            mcpURL: "http://127.0.0.1:3010/mcp"
+        )
+
+        XCTAssertTrue(result.succeeded)
+        let configuredURL = try mcpServerURL(in: configURL, sectionKey: "mcp", name: "openpets")
+        XCTAssertEqual(configuredURL, "http://127.0.0.1:3010/mcp")
+    }
+
+    func testAgentSetupInstallerUpdatesOpenCodeJSONCConfig() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent(".config/opencode/opencode.json")
+        try writeOpenCodeJSONCConfig(to: configURL, mcpURL: "http://127.0.0.1:3001/mcp")
+        let installer = OpenPetsAgentSetupInstaller(
+            processRunner: FakeProcessRunner(responses: [:]),
+            openCodeConfigurationURL: configURL
+        )
+
+        let result = try installer.install(
+            kind: .openCode,
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/opencode"),
+            mcpURL: "http://127.0.0.1:3010/mcp"
+        )
+
+        XCTAssertTrue(result.succeeded)
+        let configuredURL = try mcpServerURL(in: configURL, sectionKey: "mcp", name: "openpets")
+        XCTAssertEqual(configuredURL, "http://127.0.0.1:3010/mcp")
+    }
+
+    func testAgentSetupInstallerUpdatesExistingOpenCodeJSONCFile() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let jsonURL = directory.appendingPathComponent(".config/opencode/opencode.json")
+        let jsoncURL = directory.appendingPathComponent(".config/opencode/opencode.jsonc")
+        try writeOpenCodeJSONCConfig(to: jsoncURL, mcpURL: "http://127.0.0.1:3001/mcp")
+        let installer = OpenPetsAgentSetupInstaller(
+            processRunner: FakeProcessRunner(responses: [:]),
+            openCodeConfigurationURL: jsonURL
+        )
+
+        let result = try installer.install(
+            kind: .openCode,
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/opencode"),
+            mcpURL: "http://127.0.0.1:3010/mcp"
+        )
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: jsonURL.path))
+        let configuredURL = try mcpServerURL(in: jsoncURL, sectionKey: "mcp", name: "openpets")
+        XCTAssertEqual(configuredURL, "http://127.0.0.1:3010/mcp")
+    }
+
+    func testAgentSetupInstallerPrefersExistingOpenCodeJSONCFile() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let jsonURL = directory.appendingPathComponent(".config/opencode/opencode.json")
+        let jsoncURL = directory.appendingPathComponent(".config/opencode/opencode.jsonc")
+        try writeOpenCodeConfig(to: jsonURL, mcpURL: "http://127.0.0.1:3001/mcp")
+        try writeOpenCodeJSONCConfig(to: jsoncURL, mcpURL: "http://127.0.0.1:3002/mcp")
+        let installer = OpenPetsAgentSetupInstaller(
+            processRunner: FakeProcessRunner(responses: [:]),
+            openCodeConfigurationURL: jsonURL
+        )
+
+        let result = try installer.install(
+            kind: .openCode,
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/opencode"),
+            mcpURL: "http://127.0.0.1:3010/mcp"
+        )
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertEqual(
+            try mcpServerURL(in: jsonURL, sectionKey: "mcp", name: "openpets"),
+            "http://127.0.0.1:3001/mcp"
+        )
+        XCTAssertEqual(
+            try mcpServerURL(in: jsoncURL, sectionKey: "mcp", name: "openpets"),
+            "http://127.0.0.1:3010/mcp"
+        )
     }
 
     func testAgentSetupInstallerReturnsUninstallResult() throws {
@@ -1696,8 +1937,28 @@ final class OpenPetsTests: XCTestCase {
         )
 
         XCTAssertTrue(result.succeeded)
-        XCTAssertNil(try mcpServerURL(in: configURL, name: "openpets"))
+        XCTAssertNil(try mcpServerURL(in: configURL, sectionKey: "mcpServers", name: "openpets"))
         XCTAssertEqual(result.message, "Pi MCP setup removed.")
+    }
+
+    func testAgentSetupInstallerUninstallsOpenCodeMCPConfig() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent(".config/opencode/opencode.json")
+        try writeOpenCodeConfig(to: configURL, mcpURL: "http://127.0.0.1:3010/mcp")
+        let installer = OpenPetsAgentSetupInstaller(
+            processRunner: FakeProcessRunner(responses: [:]),
+            openCodeConfigurationURL: configURL
+        )
+
+        let result = try installer.uninstall(
+            kind: .openCode,
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/opencode")
+        )
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertNil(try mcpServerURL(in: configURL, sectionKey: "mcp", name: "openpets"))
+        XCTAssertEqual(result.message, "OpenCode MCP setup removed.")
     }
 
     func testAssistantInstructionsTargetsIncludePi() throws {
@@ -1707,6 +1968,15 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(targets.first?.displayName, "Pi global instructions")
         XCTAssertEqual(targets.first?.fileURL.lastPathComponent, "AGENTS.md")
         XCTAssertTrue(targets.first?.fileURL.path.contains(".pi/agent") == true)
+    }
+
+    func testAssistantInstructionsTargetsIncludeOpenCode() throws {
+        let targets = OpenPetsAssistantInstructions.globalInstructionTargets(for: [.openCode])
+
+        XCTAssertEqual(targets.first?.kind, .openCode)
+        XCTAssertEqual(targets.first?.displayName, "OpenCode global instructions")
+        XCTAssertEqual(targets.first?.fileURL.lastPathComponent, "AGENTS.md")
+        XCTAssertTrue(targets.first?.fileURL.path.contains(".config/opencode") == true)
     }
 
     func testAssistantInstructionsSnippetMatchesSharedGuidance() {
@@ -2114,10 +2384,51 @@ final class OpenPetsTests: XCTestCase {
         try data.write(to: url)
     }
 
-    private func mcpServerURL(in url: URL, name: String) throws -> String? {
+    private func writeOpenCodeConfig(to url: URL, mcpURL: String, enabled: Bool = true) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let object: [String: Any] = [
+            "$schema": "https://opencode.ai/config.json",
+            "theme": "opencode",
+            "mcp": [
+                "openpets": [
+                    "type": "remote",
+                    "url": mcpURL,
+                    "enabled": enabled
+                ],
+                "other": [
+                    "type": "remote",
+                    "url": "https://example.test/mcp"
+                ]
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url)
+    }
+
+    private func writeOpenCodeJSONCConfig(to url: URL, mcpURL: String) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(
+            """
+            {
+              // OpenCode allows comments in config files.
+              "$schema": "https://opencode.ai/config.json",
+              "theme": "opencode",
+              "mcp": {
+                "openpets": {
+                  "type": "remote",
+                  "url": "\(mcpURL)",
+                  "enabled": true,
+                },
+              },
+            }
+            """.utf8
+        ).write(to: url)
+    }
+
+    private func mcpServerURL(in url: URL, sectionKey: String, name: String) throws -> String? {
         let data = try Data(contentsOf: url)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let servers = try XCTUnwrap(json["mcpServers"] as? [String: Any])
+        let servers = try XCTUnwrap(json[sectionKey] as? [String: Any])
         let server = servers[name] as? [String: Any]
         return server?["url"] as? String
     }

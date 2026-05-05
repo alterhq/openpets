@@ -25,7 +25,7 @@ final class OpenPetsAgentOnboardingWindowController: NSWindowController, NSWindo
         self.installer = installer
 
         let window = NSWindow(
-            contentRect: CGRect(x: 0, y: 0, width: 520, height: 390),
+            contentRect: CGRect(x: 0, y: 0, width: 520, height: 480),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -81,7 +81,7 @@ final class OpenPetsAgentOnboardingWindowController: NSWindowController, NSWindo
     }
 
     private func showSetupScreen() {
-        window?.setContentSize(CGSize(width: 520, height: 390))
+        window?.setContentSize(CGSize(width: 520, height: 480))
         replaceContentSubviews()
 
         let titleLabel = NSTextField(labelWithString: "Connect OpenPets to your coding agents.")
@@ -141,7 +141,7 @@ final class OpenPetsAgentOnboardingWindowController: NSWindowController, NSWindo
     }
 
     private func showInstructionScreen() {
-        window?.setContentSize(CGSize(width: 560, height: 520))
+        window?.setContentSize(CGSize(width: 560, height: 640))
         replaceContentSubviews()
 
         let titleLabel = NSTextField(labelWithString: "Add OpenPets instructions.")

@@ -4,10 +4,30 @@ OpenCode can load persistent instructions from `~/.config/opencode/AGENTS.md`.
 
 ## Setup
 
-1. Open or create `~/.config/opencode/AGENTS.md`.
-2. Copy the shared OpenPets snippet from [README.md](./README.md#shared-openpets-snippet).
-3. Paste it into the file.
-4. Restart or reload OpenCode if your session does not pick up changed instructions automatically.
+OpenPets can configure OpenCode automatically from the menu bar assistant setup window when the `opencode` executable is installed. The automatic setup writes the OpenPets remote MCP server to `~/.config/opencode/opencode.json`, or updates an existing `opencode.jsonc`.
+
+Manual setup:
+
+1. Add the OpenPets remote MCP server to `~/.config/opencode/opencode.json` or `~/.config/opencode/opencode.jsonc`.
+2. Open or create `~/.config/opencode/AGENTS.md`.
+3. Copy the shared OpenPets snippet from [README.md](./README.md#shared-openpets-snippet).
+4. Paste it into the file.
+5. Restart or reload OpenCode if your session does not pick up changed instructions automatically.
+
+Example `~/.config/opencode/opencode.json` entry:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "openpets": {
+      "type": "remote",
+      "url": "http://127.0.0.1:3010/mcp",
+      "enabled": true
+    }
+  }
+}
+```
 
 ## Scope
 

@@ -5,6 +5,7 @@ enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
     case codex
     case claude
     case pi
+    case openCode
 
     var displayName: String {
         switch self {
@@ -14,6 +15,8 @@ enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
             "Claude Code"
         case .pi:
             "Pi"
+        case .openCode:
+            "OpenCode"
         }
     }
 
@@ -25,6 +28,8 @@ enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
             "claude"
         case .pi:
             "pi"
+        case .openCode:
+            "opencode"
         }
     }
 
@@ -36,6 +41,8 @@ enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
             URL(string: "https://code.claude.com/docs/en/mcp")!
         case .pi:
             URL(string: "https://pi.dev/packages/pi-mcp-extension")!
+        case .openCode:
+            URL(string: "https://opencode.ai/docs/")!
         }
     }
 }
@@ -129,6 +136,7 @@ struct OpenPetsAgentDetector: Sendable {
     var codexConfigurationURL: URL
     var claudeConfigurationURL: URL
     var piMCPConfigurationURL: URL
+    var openCodeConfigurationURL: URL
 
     init(
         processRunner: OpenPetsProcessRunning = OpenPetsDefaultProcessRunner(),
@@ -142,7 +150,11 @@ struct OpenPetsAgentDetector: Sendable {
         piMCPConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".pi", isDirectory: true)
             .appendingPathComponent("agent", isDirectory: true)
-            .appendingPathComponent("mcp.json")
+            .appendingPathComponent("mcp.json"),
+        openCodeConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("opencode", isDirectory: true)
+            .appendingPathComponent("opencode.json")
     ) {
         self.processRunner = processRunner
         self.shellURL = shellURL
@@ -150,6 +162,7 @@ struct OpenPetsAgentDetector: Sendable {
         self.codexConfigurationURL = codexConfigurationURL
         self.claudeConfigurationURL = claudeConfigurationURL
         self.piMCPConfigurationURL = piMCPConfigurationURL
+        self.openCodeConfigurationURL = openCodeConfigurationURL
     }
 
     func detectAll(mcpURL: String) -> [OpenPetsAgentDetection] {
@@ -223,6 +236,8 @@ struct OpenPetsAgentDetector: Sendable {
             return claudeConfiguredState(executableURL: executableURL, mcpURL: mcpURL)
         case .pi:
             return piConfiguredState(executableURL: executableURL, mcpURL: mcpURL)
+        case .openCode:
+            return openCodeConfiguredState(executableURL: executableURL, mcpURL: mcpURL)
         }
     }
 
@@ -243,11 +258,48 @@ struct OpenPetsAgentDetector: Sendable {
         return (.configuredDifferentURL, "OpenPets MCP exists, but should be updated to the current server URL.")
     }
 
+    private func openCodeConfiguredState(
+        executableURL: URL,
+        mcpURL: String
+    ) -> (state: OpenPetsAgentSetupState, detail: String) {
+        let server = openCodeConfigurationURLs().lazy.compactMap { configurationURL in
+            userMCPServer(
+                in: configurationURL,
+                sectionKey: "mcp",
+                name: "openpets",
+                allowJSONC: true
+            )
+        }.first
+
+        guard
+            let server,
+            let configuredURL = server["url"] as? String
+        else {
+            return (.installed, "Installed at \(executableURL.path). OpenPets MCP is not configured yet.")
+        }
+
+        guard
+            server["type"] as? String == "remote",
+            server["enabled"] as? Bool != false
+        else {
+            return (.configuredDifferentURL, "OpenPets MCP exists, but should be updated to the current server URL.")
+        }
+
+        if configuredURL == mcpURL {
+            return (.configured, "OpenPets MCP is configured at \(mcpURL).")
+        }
+        return (.configuredDifferentURL, "OpenPets MCP exists, but should be updated to the current server URL.")
+    }
+
     private func piConfiguredState(
         executableURL: URL,
         mcpURL: String
     ) -> (state: OpenPetsAgentSetupState, detail: String) {
-        guard let configuredURL = userMCPServerURL(in: piMCPConfigurationURL, name: "openpets") else {
+        guard let configuredURL = userMCPServer(
+            in: piMCPConfigurationURL,
+            sectionKey: "mcpServers",
+            name: "openpets"
+        )?["url"] as? String else {
             return (.installed, "Installed at \(executableURL.path). OpenPets MCP is not configured yet.")
         }
 
@@ -261,7 +313,11 @@ struct OpenPetsAgentDetector: Sendable {
         executableURL: URL,
         mcpURL: String
     ) -> (state: OpenPetsAgentSetupState, detail: String) {
-        guard let configuredURL = userMCPServerURL(in: claudeConfigurationURL, name: "openpets") else {
+        guard let configuredURL = userMCPServer(
+            in: claudeConfigurationURL,
+            sectionKey: "mcpServers",
+            name: "openpets"
+        )?["url"] as? String else {
             return (.installed, "Installed at \(executableURL.path). OpenPets MCP is not configured yet.")
         }
 
@@ -271,24 +327,36 @@ struct OpenPetsAgentDetector: Sendable {
         return (.configuredDifferentURL, "OpenPets MCP exists, but should be updated to the current server URL.")
     }
 
-    private func userMCPServerURL(in configurationURL: URL, name: String) -> String? {
+    private func userMCPServer(
+        in configurationURL: URL,
+        sectionKey: String,
+        name: String,
+        allowJSONC: Bool = false
+    ) -> [String: Any]? {
         guard
-            let data = try? Data(contentsOf: configurationURL),
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let servers = json["mcpServers"] as? [String: Any],
+            let json = try? OpenPetsMCPJSONConfiguration.readJSONObject(from: configurationURL, allowJSONC: allowJSONC),
+            let servers = json[sectionKey] as? [String: Any],
             let server = servers[name] as? [String: Any]
         else {
             return nil
         }
 
-        return server["url"] as? String
+        return server
+    }
+
+    private func openCodeConfigurationURLs() -> [URL] {
+        let baseURL = openCodeConfigurationURL.deletingPathExtension()
+        let jsoncURL = baseURL.appendingPathExtension("jsonc")
+        let jsonURL = baseURL.appendingPathExtension("json")
+        return [jsoncURL, jsonURL]
     }
 }
 
-private extension OpenPetsAgentDetector {
+extension OpenPetsAgentDetector {
     static func defaultSearchDirectories(homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
         var directories = pathEnvironmentDirectories()
         directories.append(contentsOf: [
+            homeDirectoryURL.appendingPathComponent(".opencode/bin", isDirectory: true),
             homeDirectoryURL.appendingPathComponent(".local/bin", isDirectory: true),
             homeDirectoryURL.appendingPathComponent("bin", isDirectory: true),
             URL(fileURLWithPath: "/opt/homebrew/bin", isDirectory: true),
@@ -316,7 +384,7 @@ private extension OpenPetsAgentDetector {
         return directories.filter { seen.insert($0.standardizedFileURL.path).inserted }
     }
 
-    static func pathEnvironmentDirectories() -> [URL] {
+    private static func pathEnvironmentDirectories() -> [URL] {
         let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
         return path
             .split(separator: ":")
@@ -324,7 +392,9 @@ private extension OpenPetsAgentDetector {
             .filter { !$0.isEmpty }
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
+}
 
+private extension OpenPetsAgentDetector {
     func setupPathStatus(for kind: OpenPetsAgentKind) -> (available: Bool, detail: String) {
         let urls = setupURLs(for: kind)
         let blockedURLs = urls.filter { !canWriteToExistingOrNearestParent($0) }
@@ -355,6 +425,10 @@ private extension OpenPetsAgentDetector {
         case .pi:
             return [
                 piMCPConfigurationURL.deletingLastPathComponent()
+            ]
+        case .openCode:
+            return [
+                openCodeConfigurationURL.deletingLastPathComponent()
             ]
         }
     }
@@ -426,32 +500,38 @@ struct OpenPetsAgentInstallResult: Equatable, Sendable {
 struct OpenPetsAgentSetupInstaller: Sendable {
     var processRunner: OpenPetsProcessRunning
     var piMCPConfigurationURL: URL
+    var openCodeConfigurationURL: URL
 
     init(
         processRunner: OpenPetsProcessRunning = OpenPetsDefaultProcessRunner(),
         piMCPConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".pi", isDirectory: true)
             .appendingPathComponent("agent", isDirectory: true)
-            .appendingPathComponent("mcp.json")
+            .appendingPathComponent("mcp.json"),
+        openCodeConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("opencode", isDirectory: true)
+            .appendingPathComponent("opencode.json")
     ) {
         self.processRunner = processRunner
         self.piMCPConfigurationURL = piMCPConfigurationURL
+        self.openCodeConfigurationURL = openCodeConfigurationURL
     }
 
     func command(kind: OpenPetsAgentKind, executableURL: URL, mcpURL: String) -> OpenPetsAgentInstallCommand {
         switch kind {
         case .codex:
-            OpenPetsAgentInstallCommand(
+            return OpenPetsAgentInstallCommand(
                 executableURL: executableURL,
                 arguments: ["mcp", "add", "openpets", "--url", mcpURL]
             )
         case .claude:
-            OpenPetsAgentInstallCommand(
+            return OpenPetsAgentInstallCommand(
                 executableURL: executableURL,
                 arguments: ["mcp", "add", "--transport", "http", "--scope", "user", "openpets", mcpURL]
             )
         case .pi:
-            OpenPetsAgentInstallCommand(
+            return OpenPetsAgentInstallCommand(
                 executableURL: executableURL,
                 arguments: ["install", "npm:pi-mcp-extension"],
                 previewTextOverride: """
@@ -459,32 +539,65 @@ struct OpenPetsAgentSetupInstaller: Sendable {
                 Write \(piMCPConfigurationURL.path) with mcpServers.openpets.url = \(mcpURL)
                 """
             )
+        case .openCode:
+            let configurationURL = openCodeWritableConfigurationURL()
+            return OpenPetsAgentInstallCommand(
+                executableURL: executableURL,
+                arguments: [],
+                previewTextOverride: "Write \(configurationURL.path) with mcp.openpets.url = \(mcpURL)"
+            )
         }
     }
 
     func uninstallCommand(kind: OpenPetsAgentKind, executableURL: URL) -> OpenPetsAgentInstallCommand {
         switch kind {
         case .codex:
-            OpenPetsAgentInstallCommand(
+            return OpenPetsAgentInstallCommand(
                 executableURL: executableURL,
                 arguments: ["mcp", "remove", "openpets"]
             )
         case .claude:
-            OpenPetsAgentInstallCommand(
+            return OpenPetsAgentInstallCommand(
                 executableURL: executableURL,
                 arguments: ["mcp", "remove", "--scope", "user", "openpets"]
             )
         case .pi:
-            OpenPetsAgentInstallCommand(
+            return OpenPetsAgentInstallCommand(
                 executableURL: executableURL,
                 arguments: [],
                 previewTextOverride: "Remove mcpServers.openpets from \(piMCPConfigurationURL.path)"
+            )
+        case .openCode:
+            let configurationURL = openCodeWritableConfigurationURL()
+            return OpenPetsAgentInstallCommand(
+                executableURL: executableURL,
+                arguments: [],
+                previewTextOverride: "Remove mcp.openpets from \(configurationURL.path)"
             )
         }
     }
 
     func install(kind: OpenPetsAgentKind, executableURL: URL, mcpURL: String) throws -> OpenPetsAgentInstallResult {
         let installCommand = command(kind: kind, executableURL: executableURL, mcpURL: mcpURL)
+        if kind == .openCode {
+            let configurationURL = openCodeWritableConfigurationURL()
+            try OpenPetsMCPJSONConfiguration.upsertOpenCodeRemoteServer(
+                name: "openpets",
+                url: mcpURL,
+                in: configurationURL
+            )
+            return OpenPetsAgentInstallResult(
+                kind: kind,
+                operation: .install,
+                command: installCommand,
+                processResult: OpenPetsProcessResult(
+                    terminationStatus: 0,
+                    standardOutput: "",
+                    standardError: ""
+                )
+            )
+        }
+
         if kind == .pi {
             let result = try processRunner.run(
                 executableURL: installCommand.executableURL,
@@ -519,8 +632,31 @@ struct OpenPetsAgentSetupInstaller: Sendable {
 
     func uninstall(kind: OpenPetsAgentKind, executableURL: URL) throws -> OpenPetsAgentInstallResult {
         let command = uninstallCommand(kind: kind, executableURL: executableURL)
+        if kind == .openCode {
+            let configurationURL = openCodeWritableConfigurationURL()
+            try OpenPetsMCPJSONConfiguration.removeServer(
+                name: "openpets",
+                sectionKey: "mcp",
+                from: configurationURL
+            )
+            return OpenPetsAgentInstallResult(
+                kind: kind,
+                operation: .uninstall,
+                command: command,
+                processResult: OpenPetsProcessResult(
+                    terminationStatus: 0,
+                    standardOutput: "",
+                    standardError: ""
+                )
+            )
+        }
+
         if kind == .pi {
-            try OpenPetsMCPJSONConfiguration.removeServer(name: "openpets", from: piMCPConfigurationURL)
+            try OpenPetsMCPJSONConfiguration.removeServer(
+                name: "openpets",
+                sectionKey: "mcpServers",
+                from: piMCPConfigurationURL
+            )
             return OpenPetsAgentInstallResult(
                 kind: kind,
                 operation: .uninstall,
@@ -543,6 +679,20 @@ struct OpenPetsAgentSetupInstaller: Sendable {
             command: command,
             processResult: result
         )
+    }
+
+    private func openCodeWritableConfigurationURL() -> URL {
+        for configurationURL in openCodeConfigurationURLs() where FileManager.default.fileExists(atPath: configurationURL.path) {
+            return configurationURL
+        }
+        return openCodeConfigurationURL
+    }
+
+    private func openCodeConfigurationURLs() -> [URL] {
+        let baseURL = openCodeConfigurationURL.deletingPathExtension()
+        let jsoncURL = baseURL.appendingPathExtension("jsonc")
+        let jsonURL = baseURL.appendingPathExtension("json")
+        return [jsoncURL, jsonURL]
     }
 }
 
@@ -617,6 +767,16 @@ enum OpenPetsAssistantInstructions {
                     .appendingPathComponent("AGENTS.md")
             ))
         }
+        if kinds.contains(.openCode) {
+            targets.append(OpenPetsInstructionTarget(
+                kind: .openCode,
+                displayName: "OpenCode global instructions",
+                fileURL: homeDirectoryURL
+                    .appendingPathComponent(".config", isDirectory: true)
+                    .appendingPathComponent("opencode", isDirectory: true)
+                    .appendingPathComponent("AGENTS.md")
+            ))
+        }
         return targets
     }
 
@@ -660,21 +820,47 @@ private enum OpenPetsMCPJSONConfiguration {
         try writeJSONObject(json, to: configurationURL)
     }
 
-    static func removeServer(name: String, from configurationURL: URL) throws {
-        var json = try readJSONObject(from: configurationURL)
-        guard var servers = json["mcpServers"] as? [String: Any] else { return }
-        servers.removeValue(forKey: name)
-        json["mcpServers"] = servers
+    static func upsertOpenCodeRemoteServer(name: String, url: String, in configurationURL: URL) throws {
+        var json = try readJSONObject(from: configurationURL, allowJSONC: true)
+        var servers = json["mcp"] as? [String: Any] ?? [:]
+        var server = servers[name] as? [String: Any] ?? [:]
+        server["type"] = "remote"
+        server["url"] = url
+        server["enabled"] = true
+        servers[name] = server
+        json["mcp"] = servers
+        if json["$schema"] == nil {
+            json["$schema"] = "https://opencode.ai/config.json"
+        }
         try writeJSONObject(json, to: configurationURL)
     }
 
-    private static func readJSONObject(from configurationURL: URL) throws -> [String: Any] {
+    static func removeServer(name: String, sectionKey: String, from configurationURL: URL) throws {
+        var json = try readJSONObject(from: configurationURL, allowJSONC: sectionKey == "mcp")
+        guard var servers = json[sectionKey] as? [String: Any] else { return }
+        servers.removeValue(forKey: name)
+        json[sectionKey] = servers
+        try writeJSONObject(json, to: configurationURL)
+    }
+
+    static func readJSONObject(from configurationURL: URL, allowJSONC: Bool = false) throws -> [String: Any] {
         guard FileManager.default.fileExists(atPath: configurationURL.path) else { return [:] }
 
         let data = try Data(contentsOf: configurationURL)
         guard !data.isEmpty else { return [:] }
 
-        let object = try JSONSerialization.jsonObject(with: data)
+        let object: Any
+        do {
+            object = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            guard
+                allowJSONC,
+                let jsonc = String(data: data, encoding: .utf8)
+            else {
+                throw error
+            }
+            object = try JSONSerialization.jsonObject(with: Data(OpenPetsJSONC.strip(jsonc).utf8))
+        }
         guard let json = object as? [String: Any] else {
             throw NSError(
                 domain: "OpenPetsAgentSetup",
@@ -692,5 +878,125 @@ private enum OpenPetsMCPJSONConfiguration {
         )
         let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: configurationURL)
+    }
+}
+
+private enum OpenPetsJSONC {
+    static func strip(_ source: String) -> String {
+        return removeTrailingCommas(from: removeComments(from: source))
+    }
+
+    private static func removeComments(from source: String) -> String {
+        var output = ""
+        var index = source.startIndex
+        var inString = false
+        var escaped = false
+
+        while index < source.endIndex {
+            let character = source[index]
+            let nextIndex = source.index(after: index)
+            let next = nextIndex < source.endIndex ? source[nextIndex] : nil
+
+            if inString {
+                output.append(character)
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                index = nextIndex
+                continue
+            }
+
+            if character == "\"" {
+                inString = true
+                output.append(character)
+                index = nextIndex
+                continue
+            }
+
+            if character == "/", next == "/" {
+                index = source.index(index, offsetBy: 2)
+                while index < source.endIndex, source[index] != "\n" {
+                    index = source.index(after: index)
+                }
+                if index < source.endIndex {
+                    output.append("\n")
+                    index = source.index(after: index)
+                }
+                continue
+            }
+
+            if character == "/", next == "*" {
+                index = source.index(index, offsetBy: 2)
+                while index < source.endIndex {
+                    let blockNextIndex = source.index(after: index)
+                    let blockNext = blockNextIndex < source.endIndex ? source[blockNextIndex] : nil
+                    if source[index] == "*", blockNext == "/" {
+                        index = source.index(index, offsetBy: 2)
+                        break
+                    }
+                    if source[index] == "\n" {
+                        output.append("\n")
+                    }
+                    index = source.index(after: index)
+                }
+                continue
+            }
+
+            output.append(character)
+            index = nextIndex
+        }
+
+        return output
+    }
+
+    private static func removeTrailingCommas(from source: String) -> String {
+        var output = ""
+        var index = source.startIndex
+        var inString = false
+        var escaped = false
+
+        while index < source.endIndex {
+            let character = source[index]
+
+            if inString {
+                output.append(character)
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                index = source.index(after: index)
+                continue
+            }
+
+            if character == "\"" {
+                inString = true
+                output.append(character)
+                index = source.index(after: index)
+                continue
+            }
+
+            if character == "," {
+                var lookahead = source.index(after: index)
+                while lookahead < source.endIndex, source[lookahead].isWhitespace {
+                    lookahead = source.index(after: lookahead)
+                }
+                if lookahead < source.endIndex, source[lookahead] == "}" || source[lookahead] == "]" {
+                    index = source.index(after: index)
+                    continue
+                }
+            }
+
+            output.append(character)
+            index = source.index(after: index)
+        }
+
+        return output
     }
 }
