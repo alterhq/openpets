@@ -1437,6 +1437,46 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertTrue(runner.recordedInvocations.isEmpty)
     }
 
+    func testAgentDetectorFindsConfiguredPiMCP() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let piURL = try makeExecutable(named: "pi", in: directory)
+        let piConfigURL = directory.appendingPathComponent(".pi/agent/mcp.json")
+        let mcpURL = "http://127.0.0.1:3010/mcp"
+        try writePiMCPConfig(to: piConfigURL, mcpURL: mcpURL)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            piMCPConfigurationURL: piConfigURL
+        ).detect(.pi, mcpURL: mcpURL)
+
+        XCTAssertEqual(detection.state, .configured)
+        XCTAssertEqual(detection.executableURL?.path, piURL.path)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
+    func testAgentDetectorReportsDifferentConfiguredPiURL() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try makeExecutable(named: "pi", in: directory)
+        let piConfigURL = directory.appendingPathComponent(".pi/agent/mcp.json")
+        try writePiMCPConfig(to: piConfigURL, mcpURL: "http://127.0.0.1:3001/mcp")
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            piMCPConfigurationURL: piConfigURL
+        ).detect(.pi, mcpURL: "http://127.0.0.1:3010/mcp")
+
+        XCTAssertEqual(detection.state, .configuredDifferentURL)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
     func testAgentDetectorUsesNonInteractiveShellOnlyAfterFastPathMissesTool() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1511,6 +1551,14 @@ final class OpenPetsTests: XCTestCase {
             ).arguments,
             ["mcp", "add", "--transport", "http", "--scope", "user", "openpets", mcpURL]
         )
+        XCTAssertEqual(
+            installer.command(
+                kind: .pi,
+                executableURL: URL(fileURLWithPath: "/usr/local/bin/pi"),
+                mcpURL: mcpURL
+            ).arguments,
+            ["install", "npm:pi-mcp-extension"]
+        )
     }
 
     func testAgentSetupInstallerBuildsUninstallCommands() {
@@ -1529,6 +1577,13 @@ final class OpenPetsTests: XCTestCase {
                 executableURL: URL(fileURLWithPath: "/usr/local/bin/claude")
             ).arguments,
             ["mcp", "remove", "--scope", "user", "openpets"]
+        )
+        XCTAssertEqual(
+            installer.uninstallCommand(
+                kind: .pi,
+                executableURL: URL(fileURLWithPath: "/usr/local/bin/pi")
+            ).arguments,
+            []
         )
     }
 
@@ -1565,6 +1620,33 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(result.message, "codex failed")
     }
 
+    func testAgentSetupInstallerInstallsPiExtensionAndWritesMCPConfig() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent(".pi/agent/mcp.json")
+        try writePiMCPConfig(to: configURL, mcpURL: "http://127.0.0.1:3001/mcp")
+        let commandKey = FakeProcessRunner.key(
+            "/usr/local/bin/pi",
+            ["install", "npm:pi-mcp-extension"]
+        )
+        let installer = OpenPetsAgentSetupInstaller(
+            processRunner: FakeProcessRunner(responses: [
+                commandKey: .success("installed")
+            ]),
+            piMCPConfigurationURL: configURL
+        )
+
+        let result = try installer.install(
+            kind: .pi,
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/pi"),
+            mcpURL: "http://127.0.0.1:3010/mcp"
+        )
+
+        XCTAssertTrue(result.succeeded)
+        let configuredURL = try mcpServerURL(in: configURL, name: "openpets")
+        XCTAssertEqual(configuredURL, "http://127.0.0.1:3010/mcp")
+    }
+
     func testAgentSetupInstallerReturnsUninstallResult() throws {
         let commandKey = FakeProcessRunner.key(
             "/usr/local/bin/claude",
@@ -1582,6 +1664,35 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertTrue(result.succeeded)
         XCTAssertEqual(result.operation, .uninstall)
         XCTAssertEqual(result.message, "Claude Code MCP setup removed.")
+    }
+
+    func testAgentSetupInstallerUninstallsPiMCPConfig() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent(".pi/agent/mcp.json")
+        try writePiMCPConfig(to: configURL, mcpURL: "http://127.0.0.1:3010/mcp")
+        let installer = OpenPetsAgentSetupInstaller(
+            processRunner: FakeProcessRunner(responses: [:]),
+            piMCPConfigurationURL: configURL
+        )
+
+        let result = try installer.uninstall(
+            kind: .pi,
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/pi")
+        )
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertNil(try mcpServerURL(in: configURL, name: "openpets"))
+        XCTAssertEqual(result.message, "Pi MCP setup removed.")
+    }
+
+    func testAssistantInstructionsTargetsIncludePi() throws {
+        let targets = OpenPetsAssistantInstructions.globalInstructionTargets(for: [.pi])
+
+        XCTAssertEqual(targets.first?.kind, .pi)
+        XCTAssertEqual(targets.first?.displayName, "Pi global instructions")
+        XCTAssertEqual(targets.first?.fileURL.lastPathComponent, "AGENTS.md")
+        XCTAssertTrue(targets.first?.fileURL.path.contains(".pi/agent") == true)
     }
 
     func testAssistantInstructionsSnippetMatchesSharedGuidance() {
@@ -1965,6 +2076,36 @@ final class OpenPetsTests: XCTestCase {
         ]
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url)
+    }
+
+    private func writePiMCPConfig(to url: URL, mcpURL: String) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let object: [String: Any] = [
+            "settings": [
+                "toolPrefix": "mcp"
+            ],
+            "mcpServers": [
+                "openpets": [
+                    "transport": "streamable-http",
+                    "url": mcpURL,
+                    "lifecycle": "eager"
+                ],
+                "other": [
+                    "transport": "streamable-http",
+                    "url": "https://example.test/mcp"
+                ]
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url)
+    }
+
+    private func mcpServerURL(in url: URL, name: String) throws -> String? {
+        let data = try Data(contentsOf: url)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let servers = try XCTUnwrap(json["mcpServers"] as? [String: Any])
+        let server = servers[name] as? [String: Any]
+        return server?["url"] as? String
     }
 
     private func schemaProperty(toolName: String, propertyName: String) throws -> [String: Value] {

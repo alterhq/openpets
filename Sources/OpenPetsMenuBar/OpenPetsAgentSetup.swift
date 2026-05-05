@@ -4,6 +4,7 @@ import OpenPetsCore
 enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
     case codex
     case claude
+    case pi
 
     var displayName: String {
         switch self {
@@ -11,6 +12,8 @@ enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
             "Codex"
         case .claude:
             "Claude Code"
+        case .pi:
+            "Pi"
         }
     }
 
@@ -20,6 +23,8 @@ enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
             "codex"
         case .claude:
             "claude"
+        case .pi:
+            "pi"
         }
     }
 
@@ -29,6 +34,8 @@ enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
             URL(string: "https://developers.openai.com/codex/mcp")!
         case .claude:
             URL(string: "https://code.claude.com/docs/en/mcp")!
+        case .pi:
+            URL(string: "https://pi.dev/packages/pi-mcp-extension")!
         }
     }
 }
@@ -121,6 +128,7 @@ struct OpenPetsAgentDetector: Sendable {
     var searchDirectories: [URL]
     var codexConfigurationURL: URL
     var claudeConfigurationURL: URL
+    var piMCPConfigurationURL: URL
 
     init(
         processRunner: OpenPetsProcessRunning = OpenPetsDefaultProcessRunner(),
@@ -130,13 +138,18 @@ struct OpenPetsAgentDetector: Sendable {
             .appendingPathComponent(".codex", isDirectory: true)
             .appendingPathComponent("config.toml"),
         claudeConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude.json")
+            .appendingPathComponent(".claude.json"),
+        piMCPConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pi", isDirectory: true)
+            .appendingPathComponent("agent", isDirectory: true)
+            .appendingPathComponent("mcp.json")
     ) {
         self.processRunner = processRunner
         self.shellURL = shellURL
         self.searchDirectories = searchDirectories
         self.codexConfigurationURL = codexConfigurationURL
         self.claudeConfigurationURL = claudeConfigurationURL
+        self.piMCPConfigurationURL = piMCPConfigurationURL
     }
 
     func detectAll(mcpURL: String) -> [OpenPetsAgentDetection] {
@@ -208,6 +221,8 @@ struct OpenPetsAgentDetector: Sendable {
             return codexConfiguredState(executableURL: executableURL, mcpURL: mcpURL)
         case .claude:
             return claudeConfiguredState(executableURL: executableURL, mcpURL: mcpURL)
+        case .pi:
+            return piConfiguredState(executableURL: executableURL, mcpURL: mcpURL)
         }
     }
 
@@ -228,11 +243,11 @@ struct OpenPetsAgentDetector: Sendable {
         return (.configuredDifferentURL, "OpenPets MCP exists, but should be updated to the current server URL.")
     }
 
-    private func claudeConfiguredState(
+    private func piConfiguredState(
         executableURL: URL,
         mcpURL: String
     ) -> (state: OpenPetsAgentSetupState, detail: String) {
-        guard let configuredURL = claudeUserMCPServerURL(name: "openpets") else {
+        guard let configuredURL = userMCPServerURL(in: piMCPConfigurationURL, name: "openpets") else {
             return (.installed, "Installed at \(executableURL.path). OpenPets MCP is not configured yet.")
         }
 
@@ -242,9 +257,23 @@ struct OpenPetsAgentDetector: Sendable {
         return (.configuredDifferentURL, "OpenPets MCP exists, but should be updated to the current server URL.")
     }
 
-    private func claudeUserMCPServerURL(name: String) -> String? {
+    private func claudeConfiguredState(
+        executableURL: URL,
+        mcpURL: String
+    ) -> (state: OpenPetsAgentSetupState, detail: String) {
+        guard let configuredURL = userMCPServerURL(in: claudeConfigurationURL, name: "openpets") else {
+            return (.installed, "Installed at \(executableURL.path). OpenPets MCP is not configured yet.")
+        }
+
+        if configuredURL == mcpURL {
+            return (.configured, "OpenPets MCP is configured at \(mcpURL).")
+        }
+        return (.configuredDifferentURL, "OpenPets MCP exists, but should be updated to the current server URL.")
+    }
+
+    private func userMCPServerURL(in configurationURL: URL, name: String) -> String? {
         guard
-            let data = try? Data(contentsOf: claudeConfigurationURL),
+            let data = try? Data(contentsOf: configurationURL),
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let servers = json["mcpServers"] as? [String: Any],
             let server = servers[name] as? [String: Any]
@@ -323,6 +352,10 @@ private extension OpenPetsAgentDetector {
             return [
                 homeDirectoryURL.appendingPathComponent(".claude", isDirectory: true)
             ]
+        case .pi:
+            return [
+                piMCPConfigurationURL.deletingLastPathComponent()
+            ]
         }
     }
 
@@ -342,9 +375,13 @@ private extension OpenPetsAgentDetector {
 struct OpenPetsAgentInstallCommand: Equatable, Sendable {
     var executableURL: URL
     var arguments: [String]
+    var previewTextOverride: String? = nil
 
     var previewText: String {
-        ([executableURL.path] + arguments).map(openPetsShellQuoted).joined(separator: " ")
+        if let previewTextOverride {
+            return previewTextOverride
+        }
+        return ([executableURL.path] + arguments).map(openPetsShellQuoted).joined(separator: " ")
     }
 }
 
@@ -388,9 +425,17 @@ struct OpenPetsAgentInstallResult: Equatable, Sendable {
 
 struct OpenPetsAgentSetupInstaller: Sendable {
     var processRunner: OpenPetsProcessRunning
+    var piMCPConfigurationURL: URL
 
-    init(processRunner: OpenPetsProcessRunning = OpenPetsDefaultProcessRunner()) {
+    init(
+        processRunner: OpenPetsProcessRunning = OpenPetsDefaultProcessRunner(),
+        piMCPConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pi", isDirectory: true)
+            .appendingPathComponent("agent", isDirectory: true)
+            .appendingPathComponent("mcp.json")
+    ) {
         self.processRunner = processRunner
+        self.piMCPConfigurationURL = piMCPConfigurationURL
     }
 
     func command(kind: OpenPetsAgentKind, executableURL: URL, mcpURL: String) -> OpenPetsAgentInstallCommand {
@@ -404,6 +449,15 @@ struct OpenPetsAgentSetupInstaller: Sendable {
             OpenPetsAgentInstallCommand(
                 executableURL: executableURL,
                 arguments: ["mcp", "add", "--transport", "http", "--scope", "user", "openpets", mcpURL]
+            )
+        case .pi:
+            OpenPetsAgentInstallCommand(
+                executableURL: executableURL,
+                arguments: ["install", "npm:pi-mcp-extension"],
+                previewTextOverride: """
+                \(openPetsShellQuoted(executableURL.path)) install npm:pi-mcp-extension
+                Write \(piMCPConfigurationURL.path) with mcpServers.openpets.url = \(mcpURL)
+                """
             )
         }
     }
@@ -420,11 +474,37 @@ struct OpenPetsAgentSetupInstaller: Sendable {
                 executableURL: executableURL,
                 arguments: ["mcp", "remove", "--scope", "user", "openpets"]
             )
+        case .pi:
+            OpenPetsAgentInstallCommand(
+                executableURL: executableURL,
+                arguments: [],
+                previewTextOverride: "Remove mcpServers.openpets from \(piMCPConfigurationURL.path)"
+            )
         }
     }
 
     func install(kind: OpenPetsAgentKind, executableURL: URL, mcpURL: String) throws -> OpenPetsAgentInstallResult {
         let installCommand = command(kind: kind, executableURL: executableURL, mcpURL: mcpURL)
+        if kind == .pi {
+            let result = try processRunner.run(
+                executableURL: installCommand.executableURL,
+                arguments: installCommand.arguments
+            )
+            if result.succeeded {
+                try OpenPetsMCPJSONConfiguration.upsertHTTPServer(
+                    name: "openpets",
+                    url: mcpURL,
+                    in: piMCPConfigurationURL
+                )
+            }
+            return OpenPetsAgentInstallResult(
+                kind: kind,
+                operation: .install,
+                command: installCommand,
+                processResult: result
+            )
+        }
+
         let result = try processRunner.run(
             executableURL: installCommand.executableURL,
             arguments: installCommand.arguments
@@ -439,6 +519,20 @@ struct OpenPetsAgentSetupInstaller: Sendable {
 
     func uninstall(kind: OpenPetsAgentKind, executableURL: URL) throws -> OpenPetsAgentInstallResult {
         let command = uninstallCommand(kind: kind, executableURL: executableURL)
+        if kind == .pi {
+            try OpenPetsMCPJSONConfiguration.removeServer(name: "openpets", from: piMCPConfigurationURL)
+            return OpenPetsAgentInstallResult(
+                kind: kind,
+                operation: .uninstall,
+                command: command,
+                processResult: OpenPetsProcessResult(
+                    terminationStatus: 0,
+                    standardOutput: "",
+                    standardError: ""
+                )
+            )
+        }
+
         let result = try processRunner.run(
             executableURL: command.executableURL,
             arguments: command.arguments
@@ -513,6 +607,16 @@ enum OpenPetsAssistantInstructions {
                     .appendingPathComponent("CLAUDE.md")
             ))
         }
+        if kinds.contains(.pi) {
+            targets.append(OpenPetsInstructionTarget(
+                kind: .pi,
+                displayName: "Pi global instructions",
+                fileURL: homeDirectoryURL
+                    .appendingPathComponent(".pi", isDirectory: true)
+                    .appendingPathComponent("agent", isDirectory: true)
+                    .appendingPathComponent("AGENTS.md")
+            ))
+        }
         return targets
     }
 
@@ -541,4 +645,52 @@ func openPetsShellQuoted(_ value: String) -> String {
         return "''"
     }
     return "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+}
+
+private enum OpenPetsMCPJSONConfiguration {
+    static func upsertHTTPServer(name: String, url: String, in configurationURL: URL) throws {
+        var json = try readJSONObject(from: configurationURL)
+        var servers = json["mcpServers"] as? [String: Any] ?? [:]
+        var server = servers[name] as? [String: Any] ?? [:]
+        server["transport"] = "streamable-http"
+        server["url"] = url
+        server["lifecycle"] = "eager"
+        servers[name] = server
+        json["mcpServers"] = servers
+        try writeJSONObject(json, to: configurationURL)
+    }
+
+    static func removeServer(name: String, from configurationURL: URL) throws {
+        var json = try readJSONObject(from: configurationURL)
+        guard var servers = json["mcpServers"] as? [String: Any] else { return }
+        servers.removeValue(forKey: name)
+        json["mcpServers"] = servers
+        try writeJSONObject(json, to: configurationURL)
+    }
+
+    private static func readJSONObject(from configurationURL: URL) throws -> [String: Any] {
+        guard FileManager.default.fileExists(atPath: configurationURL.path) else { return [:] }
+
+        let data = try Data(contentsOf: configurationURL)
+        guard !data.isEmpty else { return [:] }
+
+        let object = try JSONSerialization.jsonObject(with: data)
+        guard let json = object as? [String: Any] else {
+            throw NSError(
+                domain: "OpenPetsAgentSetup",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "\(configurationURL.path) must contain a JSON object."]
+            )
+        }
+        return json
+    }
+
+    private static func writeJSONObject(_ json: [String: Any], to configurationURL: URL) throws {
+        try FileManager.default.createDirectory(
+            at: configurationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: configurationURL)
+    }
 }

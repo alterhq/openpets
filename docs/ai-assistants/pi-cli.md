@@ -6,10 +6,29 @@ To use OpenPets well in Pi, make the OpenPets tools available to Pi and add the 
 
 ## Setup
 
-1. Make the OpenPets notification tools available to Pi.
-2. Copy the shared OpenPets snippet from [README.md](./README.md#shared-openpets-snippet).
-3. Paste it into one of the context files below.
-4. Restart Pi or run `/reload` after changing context files.
+OpenPets can configure Pi automatically from the menu bar assistant setup window when the `pi` executable is installed. The automatic setup installs `npm:pi-mcp-extension` and writes the OpenPets HTTP MCP server to `~/.pi/agent/mcp.json`.
+
+Manual setup:
+
+1. Install Pi's MCP extension with `pi install npm:pi-mcp-extension`.
+2. Add the OpenPets HTTP MCP server to `~/.pi/agent/mcp.json`.
+3. Copy the shared OpenPets snippet from [README.md](./README.md#shared-openpets-snippet).
+4. Paste it into one of the context files below.
+5. Restart Pi or run `/reload` after changing context files.
+
+Example `~/.pi/agent/mcp.json` entry:
+
+```json
+{
+  "mcpServers": {
+    "openpets": {
+      "transport": "streamable-http",
+      "url": "http://127.0.0.1:3010/mcp",
+      "lifecycle": "eager"
+    }
+  }
+}
+```
 
 ## Context Files
 

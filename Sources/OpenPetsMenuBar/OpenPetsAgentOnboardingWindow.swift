@@ -25,7 +25,7 @@ final class OpenPetsAgentOnboardingWindowController: NSWindowController, NSWindo
         self.installer = installer
 
         let window = NSWindow(
-            contentRect: CGRect(x: 0, y: 0, width: 520, height: 330),
+            contentRect: CGRect(x: 0, y: 0, width: 520, height: 390),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -81,14 +81,14 @@ final class OpenPetsAgentOnboardingWindowController: NSWindowController, NSWindo
     }
 
     private func showSetupScreen() {
-        window?.setContentSize(CGSize(width: 520, height: 330))
+        window?.setContentSize(CGSize(width: 520, height: 390))
         replaceContentSubviews()
 
         let titleLabel = NSTextField(labelWithString: "Connect OpenPets to your coding agents.")
         titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
         titleLabel.lineBreakMode = .byWordWrapping
 
-        let bodyLabel = NSTextField(labelWithString: "OpenPets will preview the MCP commands before installing them.")
+        let bodyLabel = NSTextField(labelWithString: "OpenPets will preview the MCP commands and config changes before installing them.")
         bodyLabel.font = .systemFont(ofSize: 13)
         bodyLabel.textColor = .secondaryLabelColor
         bodyLabel.lineBreakMode = .byWordWrapping
@@ -543,7 +543,7 @@ final class OpenPetsAgentOnboardingWindowController: NSWindowController, NSWindo
         Active MCP URL:
         \(mcpURL)
 
-        Commands:
+        Commands and config changes:
         \(commands.map(\.previewText).joined(separator: "\n"))
         """
         alert.addButton(withTitle: "Install")
