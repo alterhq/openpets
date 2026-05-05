@@ -140,6 +140,16 @@ if [[ "$PACKAGED_BUNDLE_EXECUTABLE" != "OpenPets" ]]; then
   echo "CFBundleExecutable must point at the OpenPets menu bar executable." >&2
   exit 1
 fi
+PACKAGED_BUNDLE_ICON_FILE="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$APP_BUNDLE/Contents/Info.plist")"
+if [[ "$PACKAGED_BUNDLE_ICON_FILE" != "AppIcon" ]]; then
+  echo "CFBundleIconFile must point at the OpenPets app icon." >&2
+  exit 1
+fi
+PACKAGED_BUNDLE_ICON_NAME="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$APP_BUNDLE/Contents/Info.plist")"
+if [[ "$PACKAGED_BUNDLE_ICON_NAME" != "AppIcon" ]]; then
+  echo "CFBundleIconName must point at the OpenPets app icon." >&2
+  exit 1
+fi
 if [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_PUBLIC_ED_KEY" "$APP_BUNDLE/Contents/Info.plist"
 fi

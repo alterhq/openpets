@@ -1,0 +1,544 @@
+import Foundation
+import OpenPetsCore
+
+enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
+    case codex
+    case claude
+
+    var displayName: String {
+        switch self {
+        case .codex:
+            "Codex"
+        case .claude:
+            "Claude Code"
+        }
+    }
+
+    var executableName: String {
+        switch self {
+        case .codex:
+            "codex"
+        case .claude:
+            "claude"
+        }
+    }
+
+    var installGuideURL: URL {
+        switch self {
+        case .codex:
+            URL(string: "https://developers.openai.com/codex/mcp")!
+        case .claude:
+            URL(string: "https://code.claude.com/docs/en/mcp")!
+        }
+    }
+}
+
+enum OpenPetsAgentSetupState: Equatable, Sendable {
+    case missing
+    case installed
+    case configured
+    case configuredDifferentURL
+    case failed(String)
+}
+
+struct OpenPetsAgentDetection: Equatable, Sendable {
+    var kind: OpenPetsAgentKind
+    var state: OpenPetsAgentSetupState
+    var executableURL: URL?
+    var detail: String
+    var setupPathsAvailable: Bool
+}
+
+struct OpenPetsProcessResult: Equatable, Sendable {
+    var terminationStatus: Int32
+    var standardOutput: String
+    var standardError: String
+
+    var succeeded: Bool {
+        terminationStatus == 0
+    }
+}
+
+protocol OpenPetsProcessRunning: Sendable {
+    func run(executableURL: URL, arguments: [String]) throws -> OpenPetsProcessResult
+}
+
+struct OpenPetsDefaultProcessRunner: OpenPetsProcessRunning, Sendable {
+    func run(executableURL: URL, arguments: [String]) throws -> OpenPetsProcessResult {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.environment = Self.environment(for: executableURL)
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let error = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        return OpenPetsProcessResult(
+            terminationStatus: process.terminationStatus,
+            standardOutput: String(data: output, encoding: .utf8) ?? "",
+            standardError: String(data: error, encoding: .utf8) ?? ""
+        )
+    }
+
+    static func environment(
+        for executableURL: URL,
+        baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var environment = baseEnvironment
+        let currentPath = baseEnvironment["PATH"] ?? ""
+        let executableDirectory = executableURL.deletingLastPathComponent().path
+        let pathDirectories = [
+            executableDirectory,
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin"
+        ] + currentPath
+            .split(separator: ":")
+            .map(String.init)
+
+        var seen = Set<String>()
+        environment["PATH"] = pathDirectories
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0).inserted }
+            .joined(separator: ":")
+        return environment
+    }
+}
+
+struct OpenPetsAgentDetector: Sendable {
+    var processRunner: OpenPetsProcessRunning
+    var shellURL: URL
+    var searchDirectories: [URL]
+    var codexConfigurationURL: URL
+    var claudeConfigurationURL: URL
+
+    init(
+        processRunner: OpenPetsProcessRunning = OpenPetsDefaultProcessRunner(),
+        shellURL: URL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"),
+        searchDirectories: [URL] = OpenPetsAgentDetector.defaultSearchDirectories(),
+        codexConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex", isDirectory: true)
+            .appendingPathComponent("config.toml"),
+        claudeConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude.json")
+    ) {
+        self.processRunner = processRunner
+        self.shellURL = shellURL
+        self.searchDirectories = searchDirectories
+        self.codexConfigurationURL = codexConfigurationURL
+        self.claudeConfigurationURL = claudeConfigurationURL
+    }
+
+    func detectAll(mcpURL: String) -> [OpenPetsAgentDetection] {
+        OpenPetsAgentKind.allCases.map { detect($0, mcpURL: mcpURL) }
+    }
+
+    func detect(_ kind: OpenPetsAgentKind, mcpURL: String) -> OpenPetsAgentDetection {
+        let setupPathStatus = setupPathStatus(for: kind)
+        do {
+            guard let executableURL = try locateExecutable(for: kind) else {
+                return OpenPetsAgentDetection(
+                    kind: kind,
+                    state: .missing,
+                    executableURL: nil,
+                    detail: "\(kind.executableName) was not found. Checked shell PATH and \(searchDirectories.count) common install locations. \(setupPathStatus.detail)",
+                    setupPathsAvailable: setupPathStatus.available
+                )
+            }
+
+            let configuredState = configuredState(for: kind, executableURL: executableURL, mcpURL: mcpURL)
+            return OpenPetsAgentDetection(
+                kind: kind,
+                state: configuredState.state,
+                executableURL: executableURL,
+                detail: "\(configuredState.detail) \(setupPathStatus.detail)",
+                setupPathsAvailable: setupPathStatus.available
+            )
+        } catch {
+            return OpenPetsAgentDetection(
+                kind: kind,
+                state: .failed(error.localizedDescription),
+                executableURL: nil,
+                detail: "\(error.localizedDescription) \(setupPathStatus.detail)",
+                setupPathsAvailable: setupPathStatus.available
+            )
+        }
+    }
+
+    private func locateExecutable(for kind: OpenPetsAgentKind) throws -> URL? {
+        for directoryURL in searchDirectories {
+            let executableURL = directoryURL.appendingPathComponent(kind.executableName)
+            if FileManager.default.isExecutableFile(atPath: executableURL.path) {
+                return executableURL
+            }
+        }
+
+        let result = try processRunner.run(
+            executableURL: shellURL,
+            arguments: ["-lc", "command -v \(kind.executableName)"]
+        )
+        let path = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if result.succeeded, !path.isEmpty {
+            let url = URL(fileURLWithPath: path)
+            if FileManager.default.isExecutableFile(atPath: url.path) {
+                return url
+            }
+        }
+
+        return nil
+    }
+
+    private func configuredState(
+        for kind: OpenPetsAgentKind,
+        executableURL: URL,
+        mcpURL: String
+    ) -> (state: OpenPetsAgentSetupState, detail: String) {
+        switch kind {
+        case .codex:
+            return codexConfiguredState(executableURL: executableURL, mcpURL: mcpURL)
+        case .claude:
+            return claudeConfiguredState(executableURL: executableURL, mcpURL: mcpURL)
+        }
+    }
+
+    private func codexConfiguredState(
+        executableURL: URL,
+        mcpURL: String
+    ) -> (state: OpenPetsAgentSetupState, detail: String) {
+        guard
+            let config = try? String(contentsOf: codexConfigurationURL),
+            config.contains("openpets")
+        else {
+            return (.installed, "Installed at \(executableURL.path). OpenPets MCP is not configured yet.")
+        }
+
+        if config.contains(mcpURL) {
+            return (.configured, "OpenPets MCP is configured at \(mcpURL).")
+        }
+        return (.configuredDifferentURL, "OpenPets MCP exists, but should be updated to the current server URL.")
+    }
+
+    private func claudeConfiguredState(
+        executableURL: URL,
+        mcpURL: String
+    ) -> (state: OpenPetsAgentSetupState, detail: String) {
+        guard let configuredURL = claudeUserMCPServerURL(name: "openpets") else {
+            return (.installed, "Installed at \(executableURL.path). OpenPets MCP is not configured yet.")
+        }
+
+        if configuredURL == mcpURL {
+            return (.configured, "OpenPets MCP is configured at \(mcpURL).")
+        }
+        return (.configuredDifferentURL, "OpenPets MCP exists, but should be updated to the current server URL.")
+    }
+
+    private func claudeUserMCPServerURL(name: String) -> String? {
+        guard
+            let data = try? Data(contentsOf: claudeConfigurationURL),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let servers = json["mcpServers"] as? [String: Any],
+            let server = servers[name] as? [String: Any]
+        else {
+            return nil
+        }
+
+        return server["url"] as? String
+    }
+}
+
+private extension OpenPetsAgentDetector {
+    static func defaultSearchDirectories(homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
+        var directories = pathEnvironmentDirectories()
+        directories.append(contentsOf: [
+            homeDirectoryURL.appendingPathComponent(".local/bin", isDirectory: true),
+            homeDirectoryURL.appendingPathComponent("bin", isDirectory: true),
+            URL(fileURLWithPath: "/opt/homebrew/bin", isDirectory: true),
+            URL(fileURLWithPath: "/usr/local/bin", isDirectory: true),
+            URL(fileURLWithPath: "/usr/bin", isDirectory: true)
+        ])
+
+        let nvmVersionsURL = homeDirectoryURL.appendingPathComponent(".nvm/versions/node", isDirectory: true)
+        if let versions = try? FileManager.default.contentsOfDirectory(
+            at: nvmVersionsURL,
+            includingPropertiesForKeys: nil
+        ) {
+            directories.append(contentsOf: versions.prefix(20).map { $0.appendingPathComponent("bin", isDirectory: true) })
+        }
+
+        let fnmMultishellsURL = homeDirectoryURL.appendingPathComponent("Library/Caches/fnm_multishells", isDirectory: true)
+        if let shells = try? FileManager.default.contentsOfDirectory(
+            at: fnmMultishellsURL,
+            includingPropertiesForKeys: nil
+        ) {
+            directories.append(contentsOf: shells.prefix(10).map { $0.appendingPathComponent("bin", isDirectory: true) })
+        }
+
+        var seen = Set<String>()
+        return directories.filter { seen.insert($0.standardizedFileURL.path).inserted }
+    }
+
+    static func pathEnvironmentDirectories() -> [URL] {
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        return path
+            .split(separator: ":")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    func setupPathStatus(for kind: OpenPetsAgentKind) -> (available: Bool, detail: String) {
+        let urls = setupURLs(for: kind)
+        let blockedURLs = urls.filter { !canWriteToExistingOrNearestParent($0) }
+        guard blockedURLs.isEmpty else {
+            return (
+                false,
+                "Setup path blocked: \(blockedURLs.map(\.path).joined(separator: ", "))."
+            )
+        }
+
+        return (
+            true,
+            "Setup paths writable: \(urls.map(\.path).joined(separator: ", "))."
+        )
+    }
+
+    func setupURLs(for kind: OpenPetsAgentKind) -> [URL] {
+        let homeDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        switch kind {
+        case .codex:
+            return [
+                homeDirectoryURL.appendingPathComponent(".codex", isDirectory: true)
+            ]
+        case .claude:
+            return [
+                homeDirectoryURL.appendingPathComponent(".claude", isDirectory: true)
+            ]
+        }
+    }
+
+    func canWriteToExistingOrNearestParent(_ url: URL) -> Bool {
+        var candidateURL = url
+        while !FileManager.default.fileExists(atPath: candidateURL.path) {
+            let parentURL = candidateURL.deletingLastPathComponent()
+            guard parentURL.path != candidateURL.path else {
+                return false
+            }
+            candidateURL = parentURL
+        }
+        return FileManager.default.isWritableFile(atPath: candidateURL.path)
+    }
+}
+
+struct OpenPetsAgentInstallCommand: Equatable, Sendable {
+    var executableURL: URL
+    var arguments: [String]
+
+    var previewText: String {
+        ([executableURL.path] + arguments).map(openPetsShellQuoted).joined(separator: " ")
+    }
+}
+
+enum OpenPetsAgentSetupOperation: Equatable, Sendable {
+    case install
+    case uninstall
+}
+
+struct OpenPetsAgentInstallResult: Equatable, Sendable {
+    var kind: OpenPetsAgentKind
+    var operation: OpenPetsAgentSetupOperation
+    var command: OpenPetsAgentInstallCommand
+    var processResult: OpenPetsProcessResult
+
+    var succeeded: Bool {
+        processResult.succeeded
+    }
+
+    var message: String {
+        if succeeded {
+            switch operation {
+            case .install:
+                return "\(kind.displayName) MCP setup completed."
+            case .uninstall:
+                return "\(kind.displayName) MCP setup removed."
+            }
+        }
+
+        let detail = processResult.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !detail.isEmpty {
+            return detail
+        }
+        switch operation {
+        case .install:
+            return "\(kind.displayName) MCP setup failed."
+        case .uninstall:
+            return "\(kind.displayName) MCP removal failed."
+        }
+    }
+}
+
+struct OpenPetsAgentSetupInstaller: Sendable {
+    var processRunner: OpenPetsProcessRunning
+
+    init(processRunner: OpenPetsProcessRunning = OpenPetsDefaultProcessRunner()) {
+        self.processRunner = processRunner
+    }
+
+    func command(kind: OpenPetsAgentKind, executableURL: URL, mcpURL: String) -> OpenPetsAgentInstallCommand {
+        switch kind {
+        case .codex:
+            OpenPetsAgentInstallCommand(
+                executableURL: executableURL,
+                arguments: ["mcp", "add", "openpets", "--url", mcpURL]
+            )
+        case .claude:
+            OpenPetsAgentInstallCommand(
+                executableURL: executableURL,
+                arguments: ["mcp", "add", "--transport", "http", "--scope", "user", "openpets", mcpURL]
+            )
+        }
+    }
+
+    func uninstallCommand(kind: OpenPetsAgentKind, executableURL: URL) -> OpenPetsAgentInstallCommand {
+        switch kind {
+        case .codex:
+            OpenPetsAgentInstallCommand(
+                executableURL: executableURL,
+                arguments: ["mcp", "remove", "openpets"]
+            )
+        case .claude:
+            OpenPetsAgentInstallCommand(
+                executableURL: executableURL,
+                arguments: ["mcp", "remove", "--scope", "user", "openpets"]
+            )
+        }
+    }
+
+    func install(kind: OpenPetsAgentKind, executableURL: URL, mcpURL: String) throws -> OpenPetsAgentInstallResult {
+        let installCommand = command(kind: kind, executableURL: executableURL, mcpURL: mcpURL)
+        let result = try processRunner.run(
+            executableURL: installCommand.executableURL,
+            arguments: installCommand.arguments
+        )
+        return OpenPetsAgentInstallResult(
+            kind: kind,
+            operation: .install,
+            command: installCommand,
+            processResult: result
+        )
+    }
+
+    func uninstall(kind: OpenPetsAgentKind, executableURL: URL) throws -> OpenPetsAgentInstallResult {
+        let command = uninstallCommand(kind: kind, executableURL: executableURL)
+        let result = try processRunner.run(
+            executableURL: command.executableURL,
+            arguments: command.arguments
+        )
+        return OpenPetsAgentInstallResult(
+            kind: kind,
+            operation: .uninstall,
+            command: command,
+            processResult: result
+        )
+    }
+}
+
+enum OpenPetsAssistantInstructions {
+    static let snippet = """
+    ## OpenPets MCP
+
+    When OpenPets MCP tools are available, use the desktop pet as the visible task-state channel.
+
+    Before any final response that reports a task result, answer, decision, blocker, or completed action, call `notify` with the same outcome you are about to report to the user. This applies even to small requests, direct answers, file searches, shell commands, edits, reviews, and failed attempts.
+
+    For non-trivial or multi-step work, also call `notify` with `running` when work starts or when meaningful progress changes. Do not notify for every internal step.
+
+    Threaded message workflow:
+
+    1. When starting a distinct task or agent run, call `notify` without `threadId`. OpenPets creates a new bubble and returns a `threadId`.
+    2. Store that `threadId` for the life of the task.
+    3. For every later progress, waiting, review, failed, done, or follow-up update for that same task, call `notify` with the same `threadId` so the existing bubble is replaced.
+    4. If multiple tasks or agents run concurrently, each task or agent should keep its own `threadId`; do not reuse one task's `threadId` for another task.
+    5. Use `clear_pet_message` with a task's `threadId` only when that specific task bubble is no longer relevant.
+
+    If the first `notify` call fails or indicates the pet is not running/visible, call `wake_pet` and retry `notify` once before sending the final response. Do not call `get_openpets_status` before normal updates.
+
+    Use statuses consistently:
+
+    - `running`: work is actively in progress
+    - `done`: the requested task completed successfully
+    - `failed`: the task failed or hit a blocker
+    - `review`: user review, confirmation, or attention is needed
+    - `waiting`: work is paused or waiting on external input
+    - `message`: neutral informational message that is not a task outcome
+
+    Final notifications must be specific. Include the actual outcome in `text`, such as "No README file was found in `/Users/sam/code/openpets`," rather than generic text like "Done."
+
+    Keep `title` short and put useful detail in `text`. Use `ttlSeconds` only for temporary updates; omit it when the message should remain visible until replaced by another notify call with the same `threadId` or cleared.
+
+    Use `play_pet_animation` only for non-message visual feedback. If you need to communicate text, use `notify` instead.
+
+    Use `stop_pet` only when the user explicitly asks to hide, stop, quit, or dismiss the pet.
+
+    Do not notify for greetings, thanks, or purely conversational replies unless the user asks for visible pet feedback.
+    """
+
+    static func globalInstructionTargets(for kinds: [OpenPetsAgentKind]) -> [OpenPetsInstructionTarget] {
+        var targets: [OpenPetsInstructionTarget] = []
+        let homeDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        if kinds.contains(.codex) {
+            targets.append(OpenPetsInstructionTarget(
+                kind: .codex,
+                displayName: "Codex global instructions",
+                fileURL: homeDirectoryURL
+                    .appendingPathComponent(".codex", isDirectory: true)
+                    .appendingPathComponent("AGENTS.md")
+            ))
+        }
+        if kinds.contains(.claude) {
+            targets.append(OpenPetsInstructionTarget(
+                kind: .claude,
+                displayName: "Claude Code user instructions",
+                fileURL: homeDirectoryURL
+                    .appendingPathComponent(".claude", isDirectory: true)
+                    .appendingPathComponent("CLAUDE.md")
+            ))
+        }
+        return targets
+    }
+
+    static func appendSnippet(to fileURL: URL) throws {
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let existingText = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
+        guard !existingText.contains("## OpenPets MCP") else { return }
+
+        let separator = existingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : "\n\n"
+        try (existingText + separator + snippet + "\n").write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+}
+
+struct OpenPetsInstructionTarget: Equatable {
+    var kind: OpenPetsAgentKind
+    var displayName: String
+    var fileURL: URL
+}
+
+func openPetsShellQuoted(_ value: String) -> String {
+    if value.isEmpty {
+        return "''"
+    }
+    return "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+}

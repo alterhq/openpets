@@ -221,6 +221,20 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(workspace.activationValues, [true, true])
     }
 
+    func testPackagedAppDeclaresOpenPetsIcon() throws {
+        let rootURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let plistURL = rootURL.appendingPathComponent("Packaging/OpenPets.app/Contents/Info.plist")
+        let iconURL = rootURL.appendingPathComponent("Packaging/OpenPets.app/Contents/Resources/AppIcon.icns")
+        let plist = try XCTUnwrap(NSDictionary(contentsOf: plistURL) as? [String: Any])
+
+        XCTAssertEqual(plist["CFBundleIconFile"] as? String, OpenPetsAppIcon.resourceName)
+        XCTAssertEqual(plist["CFBundleIconName"] as? String, OpenPetsAppIcon.resourceName)
+        XCTAssertGreaterThan(try Data(contentsOf: iconURL).count, 0)
+    }
+
     func testSpriteFrameStoreReusesCachedAssets() throws {
         let image = try makeAlphaTestImage(width: 2, height: 1, alphas: [0, 255])
         let store = PetSpriteFrameStore(frames: [.idle: [image]], spriteSize: CGSize(width: 20, height: 10))
@@ -1006,6 +1020,329 @@ final class OpenPetsTests: XCTestCase {
         )
     }
 
+    func testFirstLaunchCreatesConfigWithNextAvailableMCPPort() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configurationURL = directory.appendingPathComponent("config/openpets.json")
+
+        let didPrepare = try OpenPetsFirstLaunch.prepareConfigurationIfNeeded(
+            configurationURL: configurationURL,
+            portAllocator: OpenPetsMCPPortAllocator(
+                portChecker: FakePortChecker(availablePorts: [3003]),
+                maximumPort: 3005
+            )
+        )
+
+        XCTAssertTrue(didPrepare)
+        let configuration = try OpenPetsConfiguration.load(from: configurationURL)
+        XCTAssertEqual(configuration.mcpHost, "127.0.0.1")
+        XCTAssertEqual(configuration.mcpPort, 3003)
+        XCTAssertEqual(configuration.mcpEndpoint, "/mcp")
+    }
+
+    func testFirstLaunchDoesNotRewriteExistingConfig() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configurationURL = directory.appendingPathComponent("config/openpets.json")
+        try OpenPetsConfiguration(mcpPort: 3999).save(to: configurationURL)
+
+        let didPrepare = try OpenPetsFirstLaunch.prepareConfigurationIfNeeded(
+            configurationURL: configurationURL,
+            portAllocator: OpenPetsMCPPortAllocator(
+                portChecker: FakePortChecker(availablePorts: [3003]),
+                maximumPort: 3005
+            )
+        )
+
+        XCTAssertFalse(didPrepare)
+        XCTAssertEqual(try OpenPetsConfiguration.load(from: configurationURL).mcpPort, 3999)
+    }
+
+    func testAgentDetectorFindsConfiguredCodexAndMissingClaude() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let binURL = directory.appendingPathComponent("bin", isDirectory: true)
+        let codexURL = try makeExecutable(named: "codex", in: binURL)
+        let codexConfigURL = directory.appendingPathComponent("codex/config.toml")
+        let mcpURL = "http://127.0.0.1:3010/mcp"
+        try FileManager.default.createDirectory(at: codexConfigURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("[mcp_servers.openpets]\nurl = \"\(mcpURL)\"\n".utf8).write(to: codexConfigURL)
+        let runner = FakeProcessRunner(responses: [
+            FakeProcessRunner.key("/bin/zsh", ["-lc", "command -v claude"]): .failure("not found")
+        ])
+
+        let detections = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [binURL],
+            codexConfigurationURL: codexConfigURL
+        ).detectAll(mcpURL: mcpURL)
+
+        XCTAssertEqual(detections.first { $0.kind == .codex }?.state, .configured)
+        XCTAssertEqual(detections.first { $0.kind == .codex }?.executableURL?.path, codexURL.path)
+        XCTAssertEqual(detections.first { $0.kind == .claude }?.state, .missing)
+        XCTAssertFalse(runner.recordedInvocations.contains(FakeProcessRunner.key(codexURL.path, ["mcp", "get", "openpets"])))
+    }
+
+    func testAgentDetectorDoesNotRunClaudeMCPGetDuringDetection() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let claudeURL = try makeExecutable(named: "claude", in: directory)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            claudeConfigurationURL: directory.appendingPathComponent("missing-claude.json")
+        ).detect(.claude, mcpURL: "http://127.0.0.1:3010/mcp")
+
+        XCTAssertEqual(detection.state, .installed)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+        XCTAssertFalse(runner.recordedInvocations.contains(FakeProcessRunner.key(claudeURL.path, ["mcp", "get", "openpets"])))
+    }
+
+    func testAgentDetectorReportsDifferentConfiguredCodexURL() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let binURL = directory.appendingPathComponent("bin", isDirectory: true)
+        let codexURL = try makeExecutable(named: "codex", in: binURL)
+        let codexConfigURL = directory.appendingPathComponent("codex/config.toml")
+        try FileManager.default.createDirectory(at: codexConfigURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("[mcp_servers.openpets]\nurl = \"http://127.0.0.1:3001/mcp\"\n".utf8).write(to: codexConfigURL)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [binURL],
+            codexConfigurationURL: codexConfigURL
+        ).detect(.codex, mcpURL: "http://127.0.0.1:3010/mcp")
+
+        XCTAssertEqual(detection.state, .configuredDifferentURL)
+        XCTAssertFalse(runner.recordedInvocations.contains(FakeProcessRunner.key(codexURL.path, ["mcp", "get", "openpets"])))
+    }
+
+    func testAgentDetectorFindsConfiguredClaudeUserMCP() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let claudeURL = try makeExecutable(named: "claude", in: directory)
+        let claudeConfigURL = directory.appendingPathComponent(".claude.json")
+        let mcpURL = "http://127.0.0.1:3010/mcp"
+        try writeClaudeConfig(to: claudeConfigURL, mcpURL: mcpURL)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            claudeConfigurationURL: claudeConfigURL
+        ).detect(.claude, mcpURL: mcpURL)
+
+        XCTAssertEqual(detection.state, .configured)
+        XCTAssertEqual(detection.executableURL?.path, claudeURL.path)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
+    func testAgentDetectorReportsDifferentConfiguredClaudeURL() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try makeExecutable(named: "claude", in: directory)
+        let claudeConfigURL = directory.appendingPathComponent(".claude.json")
+        try writeClaudeConfig(to: claudeConfigURL, mcpURL: "http://127.0.0.1:3001/mcp")
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            claudeConfigurationURL: claudeConfigURL
+        ).detect(.claude, mcpURL: "http://127.0.0.1:3010/mcp")
+
+        XCTAssertEqual(detection.state, .configuredDifferentURL)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
+    func testAgentDetectorUsesNonInteractiveShellOnlyAfterFastPathMissesTool() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let codexURL = try makeExecutable(named: "codex", in: directory)
+        let runner = FakeProcessRunner(responses: [
+            FakeProcessRunner.key("/bin/zsh", ["-lc", "command -v codex"]): .success("\(codexURL.path)\n")
+        ])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [],
+            codexConfigurationURL: directory.appendingPathComponent("missing-config.toml")
+        ).detect(.codex, mcpURL: "http://127.0.0.1:3010/mcp")
+
+        XCTAssertEqual(detection.state, .installed)
+        XCTAssertEqual(detection.executableURL?.path, codexURL.path)
+        XCTAssertEqual(runner.recordedInvocations, [FakeProcessRunner.key("/bin/zsh", ["-lc", "command -v codex"])])
+    }
+
+    func testAgentDetectorFallsBackToKnownSearchDirectory() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executableURL = try makeExecutable(named: "claude", in: directory)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            claudeConfigurationURL: directory.appendingPathComponent("missing-claude.json")
+        ).detect(.claude, mcpURL: "http://127.0.0.1:3010/mcp")
+
+        XCTAssertEqual(detection.state, .installed)
+        XCTAssertEqual(detection.executableURL?.path, executableURL.path)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
+    func testAgentDetectorReportsSetupPathAvailability() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try makeExecutable(named: "codex", in: directory)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory]
+        ).detect(.codex, mcpURL: "http://127.0.0.1:3010/mcp")
+
+        XCTAssertTrue(detection.setupPathsAvailable)
+        XCTAssertTrue(detection.detail.contains(".codex"))
+    }
+
+    func testAgentSetupInstallerBuildsCommandsWithActiveMCPURL() {
+        let installer = OpenPetsAgentSetupInstaller(processRunner: FakeProcessRunner(responses: [:]))
+        let mcpURL = "http://127.0.0.1:3010/mcp"
+
+        XCTAssertEqual(
+            installer.command(
+                kind: .codex,
+                executableURL: URL(fileURLWithPath: "/usr/local/bin/codex"),
+                mcpURL: mcpURL
+            ).arguments,
+            ["mcp", "add", "openpets", "--url", mcpURL]
+        )
+        XCTAssertEqual(
+            installer.command(
+                kind: .claude,
+                executableURL: URL(fileURLWithPath: "/usr/local/bin/claude"),
+                mcpURL: mcpURL
+            ).arguments,
+            ["mcp", "add", "--transport", "http", "--scope", "user", "openpets", mcpURL]
+        )
+    }
+
+    func testAgentSetupInstallerBuildsUninstallCommands() {
+        let installer = OpenPetsAgentSetupInstaller(processRunner: FakeProcessRunner(responses: [:]))
+
+        XCTAssertEqual(
+            installer.uninstallCommand(
+                kind: .codex,
+                executableURL: URL(fileURLWithPath: "/usr/local/bin/codex")
+            ).arguments,
+            ["mcp", "remove", "openpets"]
+        )
+        XCTAssertEqual(
+            installer.uninstallCommand(
+                kind: .claude,
+                executableURL: URL(fileURLWithPath: "/usr/local/bin/claude")
+            ).arguments,
+            ["mcp", "remove", "--scope", "user", "openpets"]
+        )
+    }
+
+    func testDefaultProcessRunnerAddsExecutableDirectoryToPATH() {
+        let executableURL = URL(fileURLWithPath: "/Users/sam/.nvm/versions/node/v22.17.0/bin/codex")
+
+        let environment = OpenPetsDefaultProcessRunner.environment(
+            for: executableURL,
+            baseEnvironment: ["PATH": "/usr/bin:/bin"]
+        )
+        let pathDirectories = environment["PATH"]?.split(separator: ":").map(String.init)
+
+        XCTAssertEqual(pathDirectories?.first, "/Users/sam/.nvm/versions/node/v22.17.0/bin")
+        XCTAssertTrue(pathDirectories?.contains("/usr/bin") == true)
+        XCTAssertTrue(pathDirectories?.contains("/bin") == true)
+    }
+
+    func testAgentSetupInstallerReturnsProcessResult() throws {
+        let commandKey = FakeProcessRunner.key(
+            "/usr/local/bin/codex",
+            ["mcp", "add", "openpets", "--url", "http://127.0.0.1:3010/mcp"]
+        )
+        let installer = OpenPetsAgentSetupInstaller(processRunner: FakeProcessRunner(responses: [
+            commandKey: .failure("codex failed")
+        ]))
+
+        let result = try installer.install(
+            kind: .codex,
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/codex"),
+            mcpURL: "http://127.0.0.1:3010/mcp"
+        )
+
+        XCTAssertFalse(result.succeeded)
+        XCTAssertEqual(result.message, "codex failed")
+    }
+
+    func testAgentSetupInstallerReturnsUninstallResult() throws {
+        let commandKey = FakeProcessRunner.key(
+            "/usr/local/bin/claude",
+            ["mcp", "remove", "--scope", "user", "openpets"]
+        )
+        let installer = OpenPetsAgentSetupInstaller(processRunner: FakeProcessRunner(responses: [
+            commandKey: .success("removed")
+        ]))
+
+        let result = try installer.uninstall(
+            kind: .claude,
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/claude")
+        )
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertEqual(result.operation, .uninstall)
+        XCTAssertEqual(result.message, "Claude Code MCP setup removed.")
+    }
+
+    func testAssistantInstructionsSnippetMatchesSharedGuidance() {
+        let snippet = OpenPetsAssistantInstructions.snippet
+
+        XCTAssertTrue(snippet.contains("## OpenPets MCP"))
+        XCTAssertTrue(snippet.contains("call `notify`"))
+        XCTAssertTrue(snippet.contains("call `wake_pet` and retry `notify` once"))
+        XCTAssertTrue(snippet.contains("Do not notify for greetings"))
+    }
+
+    func testAssistantInstructionsAppendCreatesFile() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("AGENTS.md")
+
+        try OpenPetsAssistantInstructions.appendSnippet(to: fileURL)
+
+        let contents = try String(contentsOf: fileURL)
+        XCTAssertTrue(contents.contains("## OpenPets MCP"))
+        XCTAssertTrue(contents.contains("call `notify`"))
+    }
+
+    func testAssistantInstructionsAppendIsIdempotent() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("CLAUDE.md")
+
+        try OpenPetsAssistantInstructions.appendSnippet(to: fileURL)
+        try OpenPetsAssistantInstructions.appendSnippet(to: fileURL)
+
+        let contents = try String(contentsOf: fileURL)
+        XCTAssertEqual(contents.components(separatedBy: "## OpenPets MCP").count, 2)
+    }
+
     func testOpenPetsClientReportsRunningPet() throws {
         let socketPath = FileManager.default.temporaryDirectory
             .appendingPathComponent("openpets-\(UUID().uuidString).sock")
@@ -1291,6 +1628,28 @@ final class OpenPetsTests: XCTestCase {
         return String(data: outputData, encoding: .utf8) ?? ""
     }
 
+    private func makeExecutable(named name: String, in directory: URL) throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let executableURL = directory.appendingPathComponent(name)
+        try Data("#!/bin/sh\n".utf8).write(to: executableURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+        return executableURL
+    }
+
+    private func writeClaudeConfig(to url: URL, mcpURL: String) throws {
+        let object: [String: Any] = [
+            "theme": "light",
+            "mcpServers": [
+                "openpets": [
+                    "type": "http",
+                    "url": mcpURL
+                ]
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url)
+    }
+
     private func schemaProperty(toolName: String, propertyName: String) throws -> [String: Value] {
         let tool = try XCTUnwrap(openPetsTools().first { $0.name == toolName })
         let inputSchema = try XCTUnwrap(tool.inputSchema.objectValue)
@@ -1320,6 +1679,37 @@ final class OpenPetsTests: XCTestCase {
     }
 }
 
+private struct FakePortChecker: OpenPetsPortChecking {
+    var availablePorts: Set<Int>
+
+    init(availablePorts: Set<Int>) {
+        self.availablePorts = availablePorts
+    }
+
+    func isPortAvailable(host _: String, port: Int) -> Bool {
+        availablePorts.contains(port)
+    }
+}
+
+private final class FakeProcessRunner: OpenPetsProcessRunning, @unchecked Sendable {
+    var responses: [String: OpenPetsProcessResult]
+    private(set) var recordedInvocations: [String] = []
+
+    init(responses: [String: OpenPetsProcessResult]) {
+        self.responses = responses
+    }
+
+    static func key(_ executablePath: String, _ arguments: [String]) -> String {
+        ([executablePath] + arguments).joined(separator: "\u{1f}")
+    }
+
+    func run(executableURL: URL, arguments: [String]) throws -> OpenPetsProcessResult {
+        let key = Self.key(executableURL.path, arguments)
+        recordedInvocations.append(key)
+        return responses[key] ?? .failure("missing fake response")
+    }
+}
+
 private final class FakeWorkspaceOpen: @unchecked Sendable {
     private(set) var openedURLs: [URL] = []
     private(set) var activationValues: [Bool] = []
@@ -1333,5 +1723,15 @@ private final class FakeWorkspaceOpen: @unchecked Sendable {
         openedURLs.append(url)
         activationValues.append(configuration.activates)
         completions.append(completion)
+    }
+}
+
+private extension OpenPetsProcessResult {
+    static func success(_ output: String) -> OpenPetsProcessResult {
+        OpenPetsProcessResult(terminationStatus: 0, standardOutput: output, standardError: "")
+    }
+
+    static func failure(_ error: String) -> OpenPetsProcessResult {
+        OpenPetsProcessResult(terminationStatus: 1, standardOutput: "", standardError: error)
     }
 }

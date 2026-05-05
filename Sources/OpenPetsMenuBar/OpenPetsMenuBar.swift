@@ -10,6 +10,7 @@ struct OpenPetsMenuBarApp {
     @MainActor
     static func main() {
         let app = NSApplication.shared
+        OpenPetsAppIcon.install(on: app)
         let delegate = OpenPetsMenuBarAppDelegate()
         OpenPetsMenuBarRuntime.current = .init(delegate: delegate)
         app.delegate = delegate
@@ -33,8 +34,12 @@ private final class OpenPetsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
     private let controller = OpenPetsMenuBarController()
 
     func applicationDidFinishLaunching(_ notification: Foundation.Notification) {
+        let shouldShowOnboarding = controller.prepareFirstLaunch()
         controller.installMenu()
         controller.startMCPServer()
+        if shouldShowOnboarding {
+            controller.showAgentOnboarding()
+        }
         NSAppleEventManager.shared().setEventHandler(
             self,
             andSelector: #selector(handleGetURLEvent(_:withReplyEvent:)),
@@ -107,6 +112,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     private var configuration = OpenPetsConfiguration()
     private var petSession: OpenPetsHostSession?
     private var mcpApp: OpenPetsMCPHTTPApp?
+    private var agentOnboardingController: OpenPetsAgentOnboardingWindowController?
     private var mcpTask: Task<Void, Never>?
     private var mcpState = MCPState.stopped
 
@@ -145,6 +151,11 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         action: #selector(installCommandLineTool),
         keyEquivalent: ""
     )
+    private lazy var setUpAgentsItem = NSMenuItem(
+        title: "Set Up AI Assistants...",
+        action: #selector(setUpAgents),
+        keyEquivalent: ""
+    )
     private lazy var checkForUpdatesItem = NSMenuItem(
         title: "Check for Updates...",
         action: #selector(checkForUpdates),
@@ -156,6 +167,15 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         keyEquivalent: "q"
     )
 
+    func prepareFirstLaunch() -> Bool {
+        do {
+            return try OpenPetsFirstLaunch.prepareConfigurationIfNeeded()
+        } catch {
+            showError("Could not prepare OpenPets configuration", detail: error.localizedDescription)
+            return false
+        }
+    }
+
     func installMenu() {
         reloadConfiguration()
         statusItem.button?.image = NSImage(
@@ -165,7 +185,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
 
         let menu = NSMenu()
         menu.delegate = self
-        for item in [startStopServerItem, serverStatusItem, copyServerURLItem, wakeStopPetItem, openConfigItem, installCommandLineToolItem, checkForUpdatesItem, quitItem] {
+        for item in [startStopServerItem, serverStatusItem, copyServerURLItem, wakeStopPetItem, openConfigItem, installCommandLineToolItem, setUpAgentsItem, checkForUpdatesItem, quitItem] {
             item.target = self
         }
         menu.addItem(startStopServerItem)
@@ -177,6 +197,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(openConfigItem)
         menu.addItem(installCommandLineToolItem)
+        menu.addItem(setUpAgentsItem)
         menu.addItem(checkForUpdatesItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
@@ -200,6 +221,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     @objc private func showServerStatus() {
         let status = statusText()
         let alert = NSAlert()
+        OpenPetsAppIcon.apply(to: alert)
         alert.messageText = "OpenPets Status"
         alert.informativeText = status
         alert.addButton(withTitle: "OK")
@@ -246,6 +268,10 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         } catch {
             showError("Could not install command line tool", detail: error.localizedDescription)
         }
+    }
+
+    @objc private func setUpAgents() {
+        showAgentOnboarding()
     }
 
     @objc private func checkForUpdates() {
@@ -304,6 +330,19 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 }
             }
         }
+    }
+    func showAgentOnboarding() {
+        reloadConfiguration()
+        let controller = agentOnboardingController ?? OpenPetsAgentOnboardingWindowController(mcpURLProvider: { [weak self] in
+            guard let self else { return OpenPetsConfiguration().mcpClientURLString }
+            self.reloadConfiguration()
+            return self.configuration.mcpClientURLString
+        })
+        agentOnboardingController = controller
+        controller.refreshDetections()
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
     func startMCPServer() {
@@ -544,6 +583,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
 
     private func showError(_ title: String, detail: String) {
         let alert = NSAlert()
+        OpenPetsAppIcon.apply(to: alert)
         alert.alertStyle = .warning
         alert.messageText = title
         alert.informativeText = detail
@@ -553,6 +593,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
 
     private func showInfo(_ title: String, detail: String) {
         let alert = NSAlert()
+        OpenPetsAppIcon.apply(to: alert)
         alert.alertStyle = .informational
         alert.messageText = title
         alert.informativeText = detail
