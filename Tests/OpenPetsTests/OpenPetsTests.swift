@@ -585,6 +585,20 @@ final class OpenPetsTests: XCTestCase {
     }
 
     @MainActor
+    func testMenusIncludeGalleryInstallerCLIInstallerAndVersion() throws {
+        let controller = OpenPetsMenuBarController()
+        let menu = controller.makeStatusItemMenu()
+        let titles = menuItemTitles(menu)
+
+        XCTAssertTrue(titles.contains("Install pets..."))
+        XCTAssertTrue(titles.contains("Install CLI"))
+        XCTAssertFalse(titles.contains("Install Command Line Tool"))
+
+        let versionItem = try XCTUnwrap(menu.items.first { $0.title.hasPrefix("Version ") })
+        XCTAssertFalse(versionItem.isEnabled)
+    }
+
+    @MainActor
     func testCollapsedMessageLayoutHidesCardsAndKeepsToggleControl() {
         let messages = (1...3).map { index in
             PetMessage(

@@ -246,7 +246,7 @@ The spritesheet width must be divisible by 8 and the height must be divisible by
 
 The CLI is available for scripts, manual checks, and local development. For AI assistants, prefer the MCP endpoint above.
 
-To install the CLI shim, choose `Install Command Line Tool` from the paw menu. This creates `~/.local/bin/openpets`; add `~/.local/bin` to `PATH` if your shell does not already include it.
+To install the CLI shim, choose `Install CLI` from the paw menu. This creates `~/.local/bin/openpets`; add `~/.local/bin` to `PATH` if your shell does not already include it.
 
 Run a pet from a pet bundle directory:
 

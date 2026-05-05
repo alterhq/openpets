@@ -103,6 +103,21 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    private var appVersionMenuTitle: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+
+        guard let version, !version.isEmpty else {
+            return "Version Unknown"
+        }
+
+        if let build, !build.isEmpty, build != version {
+            return "Version \(version) (\(build))"
+        }
+
+        return "Version \(version)"
+    }
+
     private lazy var statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let logger = Logger(label: "openpets.menubar", factory: { StreamLogHandler.standardError(label: $0) })
     private lazy var updaterController = SPUStandardUpdaterController(
@@ -150,6 +165,11 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         action: nil,
         keyEquivalent: ""
     )
+    private lazy var installPetsItem = NSMenuItem(
+        title: "Install pets...",
+        action: #selector(openPetsGallery),
+        keyEquivalent: ""
+    )
     #if DEBUG
     private lazy var installFromLinkItem = NSMenuItem(
         title: "Install Pet From Link...",
@@ -163,7 +183,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         keyEquivalent: ""
     )
     private lazy var installCommandLineToolItem = NSMenuItem(
-        title: "Install Command Line Tool",
+        title: "Install CLI",
         action: #selector(installCommandLineTool),
         keyEquivalent: ""
     )
@@ -177,6 +197,11 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         action: #selector(checkForUpdates),
         keyEquivalent: ""
     )
+    private lazy var appVersionItem: NSMenuItem = {
+        let item = NSMenuItem(title: appVersionMenuTitle, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }()
     private lazy var quitItem = NSMenuItem(
         title: "Quit",
         action: #selector(quit),
@@ -190,11 +215,13 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         var wakeStopPetItem: NSMenuItem
         var callPetItem: NSMenuItem
         var activePetItem: NSMenuItem
+        var installPetsItem: NSMenuItem
         var installFromLinkItem: NSMenuItem?
         var openConfigItem: NSMenuItem
         var installCommandLineToolItem: NSMenuItem
         var setUpAgentsItem: NSMenuItem
         var checkForUpdatesItem: NSMenuItem
+        var appVersionItem: NSMenuItem
         var quitItem: NSMenuItem
 
         var targetedItems: [NSMenuItem] {
@@ -204,6 +231,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 copyServerURLItem,
                 wakeStopPetItem,
                 callPetItem,
+                installPetsItem,
                 openConfigItem,
                 installCommandLineToolItem,
                 setUpAgentsItem,
@@ -267,11 +295,13 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             wakeStopPetItem: wakeStopPetItem,
             callPetItem: callPetItem,
             activePetItem: activePetItem,
+            installPetsItem: installPetsItem,
             installFromLinkItem: installFromLinkItem,
             openConfigItem: openConfigItem,
             installCommandLineToolItem: installCommandLineToolItem,
             setUpAgentsItem: setUpAgentsItem,
             checkForUpdatesItem: checkForUpdatesItem,
+            appVersionItem: appVersionItem,
             quitItem: quitItem
         )
     }
@@ -318,6 +348,11 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 action: nil,
                 keyEquivalent: ""
             ),
+            installPetsItem: NSMenuItem(
+                title: "Install pets...",
+                action: #selector(openPetsGallery),
+                keyEquivalent: ""
+            ),
             installFromLinkItem: installFromLinkItem,
             openConfigItem: NSMenuItem(
                 title: "Open Config Folder",
@@ -325,7 +360,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 keyEquivalent: ""
             ),
             installCommandLineToolItem: NSMenuItem(
-                title: "Install Command Line Tool",
+                title: "Install CLI",
                 action: #selector(installCommandLineTool),
                 keyEquivalent: ""
             ),
@@ -339,6 +374,11 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 action: #selector(checkForUpdates),
                 keyEquivalent: ""
             ),
+            appVersionItem: {
+                let item = NSMenuItem(title: appVersionMenuTitle, action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                return item
+            }(),
             quitItem: NSMenuItem(
                 title: "Quit",
                 action: #selector(quit),
@@ -360,6 +400,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(items.wakeStopPetItem)
         menu.addItem(items.callPetItem)
         menu.addItem(items.activePetItem)
+        menu.addItem(items.installPetsItem)
         if let installFromLinkItem = items.installFromLinkItem {
             menu.addItem(installFromLinkItem)
         }
@@ -368,6 +409,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(items.installCommandLineToolItem)
         menu.addItem(items.setUpAgentsItem)
         menu.addItem(items.checkForUpdatesItem)
+        menu.addItem(items.appVersionItem)
         menu.addItem(.separator())
         menu.addItem(items.quitItem)
         refreshMenuItems(items)
@@ -428,6 +470,13 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    @objc private func openPetsGallery() {
+        guard let url = URL(string: "https://openpets.sh/gallery") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
     @objc private func installCommandLineTool() {
         do {
             let bundledExecutableURL = try OpenPetsCommandLineToolInstaller.bundledExecutableURL()
@@ -435,11 +484,11 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 bundledExecutableURL: bundledExecutableURL
             ).install()
             showInfo(
-                "Installed Command Line Tool",
+                "Installed CLI",
                 detail: "Installed \(installedURL.path). Add \(installedURL.deletingLastPathComponent().path) to PATH if your shell does not find openpets."
             )
         } catch {
-            showError("Could not install command line tool", detail: error.localizedDescription)
+            showError("Could not install CLI", detail: error.localizedDescription)
         }
     }
 
