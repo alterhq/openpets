@@ -102,9 +102,9 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private lazy var statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let logger = Logger(label: "openpets.menubar", factory: { StreamLogHandler.standardError(label: $0) })
-    private let updaterController = SPUStandardUpdaterController(
+    private lazy var updaterController = SPUStandardUpdaterController(
         startingUpdater: true,
         updaterDelegate: nil,
         userDriverDelegate: nil
@@ -141,6 +141,13 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         action: nil,
         keyEquivalent: ""
     )
+    #if DEBUG
+    private lazy var installFromLinkItem = NSMenuItem(
+        title: "Install Pet From Link...",
+        action: #selector(installPetFromLink),
+        keyEquivalent: ""
+    )
+    #endif
     private lazy var openConfigItem = NSMenuItem(
         title: "Open Config Folder",
         action: #selector(openConfigFolder),
@@ -167,6 +174,38 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         keyEquivalent: "q"
     )
 
+    private struct OpenPetsMenuItems {
+        var startStopServerItem: NSMenuItem
+        var serverStatusItem: NSMenuItem
+        var copyServerURLItem: NSMenuItem
+        var wakeStopPetItem: NSMenuItem
+        var activePetItem: NSMenuItem
+        var installFromLinkItem: NSMenuItem?
+        var openConfigItem: NSMenuItem
+        var installCommandLineToolItem: NSMenuItem
+        var setUpAgentsItem: NSMenuItem
+        var checkForUpdatesItem: NSMenuItem
+        var quitItem: NSMenuItem
+
+        var targetedItems: [NSMenuItem] {
+            var items = [
+                startStopServerItem,
+                serverStatusItem,
+                copyServerURLItem,
+                wakeStopPetItem,
+                openConfigItem,
+                installCommandLineToolItem,
+                setUpAgentsItem,
+                checkForUpdatesItem,
+                quitItem
+            ]
+            if let installFromLinkItem {
+                items.append(installFromLinkItem)
+            }
+            return items
+        }
+    }
+
     func prepareFirstLaunch() -> Bool {
         do {
             return try OpenPetsFirstLaunch.prepareConfigurationIfNeeded()
@@ -183,31 +222,138 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             accessibilityDescription: "OpenPets"
         )
 
-        let menu = NSMenu()
+        let menu = makeStatusItemMenu()
         menu.delegate = self
-        for item in [startStopServerItem, serverStatusItem, copyServerURLItem, wakeStopPetItem, openConfigItem, installCommandLineToolItem, setUpAgentsItem, checkForUpdatesItem, quitItem] {
-            item.target = self
-        }
-        menu.addItem(startStopServerItem)
-        menu.addItem(serverStatusItem)
-        menu.addItem(copyServerURLItem)
-        menu.addItem(.separator())
-        menu.addItem(wakeStopPetItem)
-        menu.addItem(activePetItem)
-        menu.addItem(.separator())
-        menu.addItem(openConfigItem)
-        menu.addItem(installCommandLineToolItem)
-        menu.addItem(setUpAgentsItem)
-        menu.addItem(checkForUpdatesItem)
-        menu.addItem(.separator())
-        menu.addItem(quitItem)
         statusItem.menu = menu
-        refreshMenu()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         reloadConfiguration()
         refreshMenu()
+    }
+
+    func makeStatusItemMenu() -> NSMenu {
+        reloadConfiguration()
+        return makeMenu(with: statusMenuItems())
+    }
+
+    func makePetContextMenu() -> NSMenu {
+        reloadConfiguration()
+        return makeMenu(with: makeMenuItems())
+    }
+
+    private func statusMenuItems() -> OpenPetsMenuItems {
+        #if DEBUG
+        let installFromLinkItem: NSMenuItem? = installFromLinkItem
+        #else
+        let installFromLinkItem: NSMenuItem? = nil
+        #endif
+
+        return OpenPetsMenuItems(
+            startStopServerItem: startStopServerItem,
+            serverStatusItem: serverStatusItem,
+            copyServerURLItem: copyServerURLItem,
+            wakeStopPetItem: wakeStopPetItem,
+            activePetItem: activePetItem,
+            installFromLinkItem: installFromLinkItem,
+            openConfigItem: openConfigItem,
+            installCommandLineToolItem: installCommandLineToolItem,
+            setUpAgentsItem: setUpAgentsItem,
+            checkForUpdatesItem: checkForUpdatesItem,
+            quitItem: quitItem
+        )
+    }
+
+    private func makeMenuItems() -> OpenPetsMenuItems {
+        #if DEBUG
+        let installFromLinkItem = NSMenuItem(
+            title: "Install Pet From Link...",
+            action: #selector(installPetFromLink),
+            keyEquivalent: ""
+        )
+        #else
+        let installFromLinkItem: NSMenuItem? = nil
+        #endif
+
+        return OpenPetsMenuItems(
+            startStopServerItem: NSMenuItem(
+                title: "Start MCP Server",
+                action: #selector(toggleMCPServer),
+                keyEquivalent: ""
+            ),
+            serverStatusItem: NSMenuItem(
+                title: "Server Status",
+                action: #selector(showServerStatus),
+                keyEquivalent: ""
+            ),
+            copyServerURLItem: NSMenuItem(
+                title: "Copy MCP URL",
+                action: #selector(copyServerURL),
+                keyEquivalent: ""
+            ),
+            wakeStopPetItem: NSMenuItem(
+                title: "Wake Pet",
+                action: #selector(togglePet),
+                keyEquivalent: ""
+            ),
+            activePetItem: NSMenuItem(
+                title: "Active Pet",
+                action: nil,
+                keyEquivalent: ""
+            ),
+            installFromLinkItem: installFromLinkItem,
+            openConfigItem: NSMenuItem(
+                title: "Open Config Folder",
+                action: #selector(openConfigFolder),
+                keyEquivalent: ""
+            ),
+            installCommandLineToolItem: NSMenuItem(
+                title: "Install Command Line Tool",
+                action: #selector(installCommandLineTool),
+                keyEquivalent: ""
+            ),
+            setUpAgentsItem: NSMenuItem(
+                title: "Set Up AI Assistants...",
+                action: #selector(setUpAgents),
+                keyEquivalent: ""
+            ),
+            checkForUpdatesItem: NSMenuItem(
+                title: "Check for Updates...",
+                action: #selector(checkForUpdates),
+                keyEquivalent: ""
+            ),
+            quitItem: NSMenuItem(
+                title: "Quit",
+                action: #selector(quit),
+                keyEquivalent: "q"
+            )
+        )
+    }
+
+    private func makeMenu(with items: OpenPetsMenuItems) -> NSMenu {
+        for item in items.targetedItems {
+            item.target = self
+        }
+
+        let menu = NSMenu()
+        menu.addItem(items.startStopServerItem)
+        menu.addItem(items.serverStatusItem)
+        menu.addItem(items.copyServerURLItem)
+        menu.addItem(.separator())
+        menu.addItem(items.wakeStopPetItem)
+        menu.addItem(items.activePetItem)
+        if let installFromLinkItem = items.installFromLinkItem {
+            menu.addItem(installFromLinkItem)
+        }
+        menu.addItem(.separator())
+        menu.addItem(items.openConfigItem)
+        menu.addItem(items.installCommandLineToolItem)
+        menu.addItem(items.setUpAgentsItem)
+        menu.addItem(items.checkForUpdatesItem)
+        menu.addItem(.separator())
+        menu.addItem(items.quitItem)
+        refreshMenuItems(items)
+        return menu
     }
 
     @objc private func toggleMCPServer() {
@@ -302,6 +448,38 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             showError("Could not switch pet", detail: error.localizedDescription)
         }
     }
+
+    #if DEBUG
+    @objc private func installPetFromLink() {
+        let input = NSTextField(frame: CGRect(x: 0, y: 0, width: 420, height: 24))
+        input.placeholderString = "openpets://install?url=..."
+        if let pasteboardString = NSPasteboard.general.string(forType: .string) {
+            input.stringValue = pasteboardString.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let alert = NSAlert()
+        OpenPetsAppIcon.apply(to: alert)
+        alert.messageText = "Install Pet From Link"
+        alert.informativeText = "Paste an OpenPets install link or pet archive URL."
+        alert.accessoryView = input
+        alert.addButton(withTitle: "Install")
+        alert.addButton(withTitle: "Cancel")
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+
+        guard response == .alertFirstButtonReturn else {
+            return
+        }
+
+        let source = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty, let url = URL(string: source) else {
+            showError("Invalid install link", detail: "Enter a valid openpets://, http://, https://, or file:// URL.")
+            return
+        }
+
+        installPet(from: url)
+    }
+    #endif
 
     func installPet(from url: URL) {
         Task {
@@ -425,7 +603,9 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             socketPath: configuration.socketPath,
             display: configuration.display
         )
-        let session = OpenPetsHostSession(configuration: hostConfiguration)
+        let session = OpenPetsHostSession(configuration: hostConfiguration, contextMenuProvider: { [weak self] in
+            self?.makePetContextMenu()
+        })
         try session.start()
         petSession = session
         refreshMenu()
@@ -494,17 +674,21 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func reloadConfiguration() {
-        configuration = (try? OpenPetsConfiguration.loadOrCreateDefault()) ?? OpenPetsConfiguration()
+        configuration = (try? OpenPetsConfiguration.load()) ?? OpenPetsConfiguration()
     }
 
     private func refreshMenu() {
-        startStopServerItem.title = mcpState.isActive ? "Stop MCP Server" : "Start MCP Server"
-        serverStatusItem.title = "Server Status: \(mcpState.label)"
-        wakeStopPetItem.title = petSession?.isRunning == true ? "Stop Pet" : "Wake Pet"
-        refreshPetMenu()
+        refreshMenuItems(statusMenuItems())
     }
 
-    private func refreshPetMenu() {
+    private func refreshMenuItems(_ items: OpenPetsMenuItems) {
+        items.startStopServerItem.title = mcpState.isActive ? "Stop MCP Server" : "Start MCP Server"
+        items.serverStatusItem.title = "Server Status: \(mcpState.label)"
+        items.wakeStopPetItem.title = petSession?.isRunning == true ? "Stop Pet" : "Wake Pet"
+        refreshPetMenu(items.activePetItem)
+    }
+
+    private func refreshPetMenu(_ activePetItem: NSMenuItem) {
         let menu = NSMenu()
         let pets = OpenPetsPetLibrary().listPets()
         for pet in pets {

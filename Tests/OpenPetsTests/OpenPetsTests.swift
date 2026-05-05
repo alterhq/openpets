@@ -435,6 +435,62 @@ final class OpenPetsTests: XCTestCase {
     }
 
     @MainActor
+    func testPetHostViewRightClickShowsContextMenuWithoutClickOrDrag() throws {
+        let image = try makeAlphaTestImage(width: 1, height: 1, alphas: [255])
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Wake Pet", action: nil, keyEquivalent: "")
+        let view = PetHostView(
+            spriteSize: CGSize(width: 10, height: 10),
+            stableSpriteBounds: CGRect(x: 0, y: 0, width: 10, height: 10),
+            frames: [.idle: [image]],
+            contextMenuProvider: { menu }
+        )
+        let window = NSWindow(
+            contentRect: CGRect(origin: .zero, size: view.bounds.size),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = view
+
+        var presentedMenus: [NSMenu] = []
+        var clicked = false
+        var dragStarted = false
+        view.contextMenuPresenter = { menu, _, _ in presentedMenus.append(menu) }
+        view.onClick = { clicked = true }
+        view.onDragStart = { dragStarted = true }
+
+        let point = CGPoint(x: 5, y: 5)
+        let target = try XCTUnwrap(view.hitTest(point))
+        let rightMouseDown = try XCTUnwrap(mouseEvent(type: .rightMouseDown, location: point, window: window))
+        target.rightMouseDown(with: rightMouseDown)
+
+        XCTAssertEqual(presentedMenus.count, 1)
+        XCTAssertTrue(presentedMenus.first === menu)
+        XCTAssertFalse(clicked)
+        XCTAssertFalse(dragStarted)
+
+        let leftMouseDown = try XCTUnwrap(mouseEvent(type: .leftMouseDown, location: point, window: window))
+        let leftMouseUp = try XCTUnwrap(mouseEvent(type: .leftMouseUp, location: point, window: window))
+        target.mouseDown(with: leftMouseDown)
+        target.mouseUp(with: leftMouseUp)
+
+        XCTAssertEqual(presentedMenus.count, 1)
+        XCTAssertTrue(clicked)
+        XCTAssertTrue(dragStarted)
+    }
+
+    @MainActor
+    func testPetContextMenuMatchesStatusMenuTopLevelItems() {
+        let controller = OpenPetsMenuBarController()
+        let statusMenu = controller.makeStatusItemMenu()
+        let petContextMenu = controller.makePetContextMenu()
+
+        XCTAssertEqual(menuItemTitles(statusMenu), menuItemTitles(petContextMenu))
+        XCTAssertNotNil(petContextMenu.items.first { $0.title.hasPrefix("Active Pet:") }?.submenu)
+    }
+
+    @MainActor
     func testCollapsedMessageLayoutHidesCardsAndKeepsToggleControl() {
         let messages = (1...3).map { index in
             PetMessage(
@@ -1661,6 +1717,12 @@ final class OpenPetsTests: XCTestCase {
         let tool = try XCTUnwrap(openPetsTools().first { $0.name == toolName })
         let inputSchema = try XCTUnwrap(tool.inputSchema.objectValue)
         return inputSchema["required"]?.arrayValue?.compactMap(\.stringValue) ?? []
+    }
+
+    private func menuItemTitles(_ menu: NSMenu) -> [String] {
+        menu.items.map { item in
+            item.isSeparatorItem ? "<separator>" : item.title
+        }
     }
 
     @MainActor

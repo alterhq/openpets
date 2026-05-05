@@ -154,6 +154,7 @@ public enum OpenPetsHost {
 public final class OpenPetsHostSession {
     public private(set) var configuration: OpenPetsHostConfiguration
     public let terminatesApplicationOnShutdown: Bool
+    private let contextMenuProvider: (@MainActor () -> NSMenu?)?
     private var controller: PetHostController?
     private var server: OpenPetsServer?
 
@@ -167,10 +168,12 @@ public final class OpenPetsHostSession {
 
     public init(
         configuration: OpenPetsHostConfiguration,
-        terminatesApplicationOnShutdown: Bool = false
+        terminatesApplicationOnShutdown: Bool = false,
+        contextMenuProvider: (@MainActor () -> NSMenu?)? = nil
     ) {
         self.configuration = configuration
         self.terminatesApplicationOnShutdown = terminatesApplicationOnShutdown
+        self.contextMenuProvider = contextMenuProvider
     }
 
     public func start() throws {
@@ -180,7 +183,8 @@ public final class OpenPetsHostSession {
         let controller = try PetHostController(
             petBundle: petBundle,
             display: configuration.display,
-            positionStore: PetPositionStore(url: configuration.positionStoreURL)
+            positionStore: PetPositionStore(url: configuration.positionStoreURL),
+            contextMenuProvider: contextMenuProvider
         )
         let bridge = PetHostCommandBridge(session: self)
         let server = OpenPetsServer(socketPath: configuration.socketPath) { command in
@@ -388,7 +392,12 @@ private final class PetHostController {
         petBundle.manifest
     }
 
-    init(petBundle: PetBundle, display: OpenPetsDisplayConfiguration, positionStore: PetPositionStore) throws {
+    init(
+        petBundle: PetBundle,
+        display: OpenPetsDisplayConfiguration,
+        positionStore: PetPositionStore,
+        contextMenuProvider: (@MainActor () -> NSMenu?)? = nil
+    ) throws {
         self.petBundle = petBundle
         self.positionStore = positionStore
         messageAreaHeight = max(display.messageAreaHeight, 108)
@@ -409,7 +418,8 @@ private final class PetHostController {
         petView = PetHostView(
             spriteSize: spriteSize,
             stableSpriteBounds: stableSpriteBounds,
-            frames: frames
+            frames: frames,
+            contextMenuProvider: contextMenuProvider
         )
         messageView = PetMessagePanelView(
             petSize: stableSpriteBounds.size,
@@ -950,6 +960,11 @@ final class PetHostView: NSView {
         set { spriteView.onInteractionEnd = newValue }
     }
 
+    var contextMenuPresenter: (NSMenu, NSEvent, NSView) -> Void {
+        get { spriteView.contextMenuPresenter }
+        set { spriteView.contextMenuPresenter = newValue }
+    }
+
     var visibleSpriteFrame: CGRect {
         bounds
     }
@@ -965,7 +980,8 @@ final class PetHostView: NSView {
     init(
         spriteSize: CGSize,
         stableSpriteBounds: CGRect,
-        frames: [PetAnimation: [CGImage]]
+        frames: [PetAnimation: [CGImage]],
+        contextMenuProvider: (@MainActor () -> NSMenu?)? = nil
     ) {
         self.spriteSize = spriteSize
         self.stableSpriteBounds = stableSpriteBounds
@@ -976,7 +992,8 @@ final class PetHostView: NSView {
         spriteView = PetSpriteView(
             frame: CGRect(origin: .zero, size: size),
             spriteSize: spriteSize,
-            frames: frames
+            frames: frames,
+            contextMenuProvider: contextMenuProvider
         )
         super.init(frame: CGRect(origin: .zero, size: size))
         wantsLayer = true
@@ -2164,6 +2181,9 @@ private final class PetSpriteView: NSView {
     var onDragDirectionChange: ((PetAnimation) -> Void)?
     var onDragEnd: ((CGVector, PetAnimation?) -> Void)?
     var onInteractionEnd: (() -> Void)?
+    var contextMenuPresenter: (NSMenu, NSEvent, NSView) -> Void = { menu, event, view in
+        NSMenu.popUpContextMenu(menu, with: event, for: view)
+    }
     var spriteFrame: CGRect {
         didSet {
             needsDisplay = true
@@ -2172,15 +2192,18 @@ private final class PetSpriteView: NSView {
 
     private let spriteSize: CGSize
     private let frameStore: PetSpriteFrameStore
+    private let contextMenuProvider: (@MainActor () -> NSMenu?)?
     private var currentFrameAsset: PetSpriteFrameAsset?
     private var dragTracker = PetDragTracker()
 
     init(
         frame: CGRect,
         spriteSize: CGSize,
-        frames: [PetAnimation: [CGImage]]
+        frames: [PetAnimation: [CGImage]],
+        contextMenuProvider: (@MainActor () -> NSMenu?)? = nil
     ) {
         self.spriteSize = spriteSize
+        self.contextMenuProvider = contextMenuProvider
         frameStore = PetSpriteFrameStore(frames: frames, spriteSize: spriteSize)
         let initialAsset = frameStore.asset(for: .idle, frameIndex: 0)
         spriteFrame = CGRect(
@@ -2230,6 +2253,15 @@ private final class PetSpriteView: NSView {
             windowOrigin: window?.frame.origin ?? .zero,
             timestamp: event.timestamp
         )
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard let menu = contextMenuProvider?() else {
+            super.rightMouseDown(with: event)
+            return
+        }
+
+        contextMenuPresenter(menu, event, self)
     }
 
     override func mouseDragged(with event: NSEvent) {
