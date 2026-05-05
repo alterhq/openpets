@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -188,6 +189,36 @@ final class OpenPetsTests: XCTestCase {
         )
 
         XCTAssertEqual(actionLayout.cardFrame.height, plainLayout.cardFrame.height)
+    }
+
+    @MainActor
+    func testActionURLOpenerCompletionCanRunOffMainActor() async throws {
+        let workspace = FakeWorkspaceOpen()
+        let opener = OpenPetsActionURLOpener(workspaceOpen: workspace.open)
+        let url = try XCTUnwrap(URL(string: "x-openpets-test://callback?thread=123"))
+
+        opener.open(url)
+
+        XCTAssertEqual(workspace.openedURLs, [url])
+        XCTAssertEqual(workspace.activationValues, [true])
+
+        let completion = try XCTUnwrap(workspace.completions.first)
+        await Task.detached {
+            completion(nil, nil)
+        }.value
+    }
+
+    func testPetBubbleActionUsesSharedURLOpener() throws {
+        let workspace = FakeWorkspaceOpen()
+        let opener = OpenPetsActionURLOpener(workspaceOpen: workspace.open)
+        let url = try XCTUnwrap(URL(string: "https://example.com/review?id=123"))
+        let action = PetBubbleAction(label: "Review", url: url)
+
+        action.open(source: "test", using: opener)
+        action.open(source: "test", using: opener)
+
+        XCTAssertEqual(workspace.openedURLs, [url, url])
+        XCTAssertEqual(workspace.activationValues, [true, true])
     }
 
     func testSpriteFrameStoreReusesCachedAssets() throws {
@@ -432,6 +463,49 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(closeFrame.minY, layout.cardFrame.minY)
         XCTAssertLessThanOrEqual(closeFrame.maxX, layout.cardFrame.maxX)
         XCTAssertLessThanOrEqual(closeFrame.maxY, layout.cardFrame.maxY)
+    }
+
+    @MainActor
+    func testMessagePanelHandlesActionBubbleHitInAppKitLayer() throws {
+        let actionURL = try XCTUnwrap(URL(string: "ical://"))
+        let workspace = FakeWorkspaceOpen()
+        let bubble = PetBubble(
+            title: "Open Calendar",
+            detail: nil,
+            indicator: .none,
+            action: PetBubbleAction(label: "Open Calendar", url: actionURL)
+        )
+        let view = PetMessagePanelView(petSize: CGSize(width: 112, height: 126), messageAreaHeight: 108)
+        var dismissedThreadIds: [String] = []
+        view.onDismissMessage = { dismissedThreadIds.append($0) }
+        view.actionURLOpener = OpenPetsActionURLOpener(workspaceOpen: workspace.open)
+        view.setBubble(bubble, threadId: "thread-1")
+        let layout = OpenPetsMessageLayout.makeMessagePanel(
+            messages: [PetMessage(threadId: "thread-1", bubble: bubble)],
+            hiddenMessageCount: 0,
+            petSize: CGSize(width: 112, height: 126),
+            messageAreaHeight: 108
+        )
+        let window = NSWindow(
+            contentRect: CGRect(origin: .zero, size: view.bounds.size),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = view
+        let point = CGPoint(x: layout.cardFrame.midX, y: layout.cardFrame.midY)
+        let mouseDown = try XCTUnwrap(mouseEvent(type: .leftMouseDown, location: point, window: window))
+        let mouseUp = try XCTUnwrap(mouseEvent(type: .leftMouseUp, location: point, window: window))
+
+        XCTAssertTrue(layout.cardFrame.contains(point))
+        XCTAssertTrue(view.hitTest(point) === view)
+        XCTAssertTrue(view.acceptsFirstMouse(for: mouseDown))
+
+        view.mouseDown(with: mouseDown)
+        view.mouseUp(with: mouseUp)
+
+        XCTAssertEqual(workspace.openedURLs, [actionURL])
+        XCTAssertEqual(dismissedThreadIds, ["thread-1"])
     }
 
     func testMCPToolDescriptionsGuideAgentUsage() throws {
@@ -1228,5 +1302,36 @@ final class OpenPetsTests: XCTestCase {
         let tool = try XCTUnwrap(openPetsTools().first { $0.name == toolName })
         let inputSchema = try XCTUnwrap(tool.inputSchema.objectValue)
         return inputSchema["required"]?.arrayValue?.compactMap(\.stringValue) ?? []
+    }
+
+    @MainActor
+    private func mouseEvent(type: NSEvent.EventType, location: CGPoint, window: NSWindow) -> NSEvent? {
+        NSEvent.mouseEvent(
+            with: type,
+            location: location,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )
+    }
+}
+
+private final class FakeWorkspaceOpen: @unchecked Sendable {
+    private(set) var openedURLs: [URL] = []
+    private(set) var activationValues: [Bool] = []
+    private(set) var completions: [OpenPetsActionURLOpener.Completion] = []
+
+    func open(
+        url: URL,
+        configuration: NSWorkspace.OpenConfiguration,
+        completion: @escaping OpenPetsActionURLOpener.Completion
+    ) {
+        openedURLs.append(url)
+        activationValues.append(configuration.activates)
+        completions.append(completion)
     }
 }

@@ -884,6 +884,12 @@ struct PetBubble: Equatable {
 struct PetBubbleAction: Equatable {
     var label: String
     var url: URL
+
+    func open(source: String, using opener: OpenPetsActionURLOpener = OpenPetsActionURLOpener()) {
+        let urlDescription = OpenPetsActionURLOpener.traceDescription(for: url)
+        NSLog("%@", "OpenPets action URL click detected from \(source): label=\(label) url=\(urlDescription)" as NSString)
+        opener.open(url)
+    }
 }
 
 enum PetBubbleIndicator: Equatable {
@@ -1016,6 +1022,7 @@ final class PetHostView: NSView {
 final class PetMessagePanelView: NSView {
     var onDismissMessage: ((String) -> Void)?
     var onLayoutChanged: (() -> Void)?
+    var actionURLOpener = OpenPetsActionURLOpener()
 
     var hasVisibleMessages: Bool {
         !messageStack.visibleMessages().isEmpty
@@ -1047,6 +1054,7 @@ final class PetMessagePanelView: NSView {
     private enum MessageMouseTarget: Equatable {
         case toggle
         case dismiss(String)
+        case action(String, PetBubbleAction)
     }
 
     init(petSize: CGSize, messageAreaHeight: CGFloat) {
@@ -1077,12 +1085,17 @@ final class PetMessagePanelView: NSView {
         return hitView === self ? nil : hitView
     }
 
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        guard let event else { return false }
+        return messageMouseTarget(for: event) != nil
+    }
+
     override func mouseDown(with event: NSEvent) {
-        mouseDownMessageTarget = messageMouseTarget(at: convert(event.locationInWindow, from: nil))
+        mouseDownMessageTarget = messageMouseTarget(for: event)
     }
 
     override func mouseUp(with event: NSEvent) {
-        let target = messageMouseTarget(at: convert(event.locationInWindow, from: nil))
+        let target = messageMouseTarget(for: event)
         defer { mouseDownMessageTarget = nil }
 
         guard let mouseDownMessageTarget, mouseDownMessageTarget == target else {
@@ -1093,6 +1106,9 @@ final class PetMessagePanelView: NSView {
         case .toggle:
             toggleMessageStackCollapsed()
         case .dismiss(let threadId):
+            onDismissMessage?(threadId)
+        case .action(let threadId, let action):
+            action.open(source: "bubble", using: actionURLOpener)
             onDismissMessage?(threadId)
         }
     }
@@ -1185,7 +1201,8 @@ final class PetMessagePanelView: NSView {
             MessageHostingView.InteractiveRegion(
                 threadId: message.threadId,
                 cardFrame: cardFrame,
-                closeButtonFrame: OpenPetsMessageLayout.closeButtonFrame(in: cardFrame)
+                closeButtonFrame: OpenPetsMessageLayout.closeButtonFrame(in: cardFrame),
+                action: message.bubble.action
             )
         }
         bubbleView.onDismissMessage = { [weak self] threadId in
@@ -1203,7 +1220,17 @@ final class PetMessagePanelView: NSView {
         if let dismissRegion = bubbleView.dismissRegions.first(where: { $0.closeButtonFrame.contains(normalizedPoint) }) {
             return .dismiss(dismissRegion.threadId)
         }
+        if
+            let actionRegion = bubbleView.dismissRegions.first(where: { $0.cardFrame.contains(normalizedPoint) && $0.action != nil }),
+            let action = actionRegion.action
+        {
+            return .action(actionRegion.threadId, action)
+        }
         return nil
+    }
+
+    private func messageMouseTarget(for event: NSEvent) -> MessageMouseTarget? {
+        messageMouseTarget(at: convert(event.locationInWindow, from: nil))
     }
 
     private func toggleMessageStackCollapsed() {
@@ -1486,6 +1513,7 @@ private final class MessageHostingView: NSHostingView<OpenPetsMessageView> {
         var threadId: String
         var cardFrame: CGRect
         var closeButtonFrame: CGRect
+        var action: PetBubbleAction?
     }
 
     var interactiveRects: [CGRect] = []
@@ -1659,6 +1687,35 @@ private struct OpenPetsBubbleContentView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        if let action = bubble.action {
+            ZStack(alignment: .bottomTrailing) {
+                Button {
+                    action.open(source: "bubble")
+                } label: {
+                    bubbleContent
+                }
+                .buttonStyle(.plain)
+                .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .accessibilityLabel(bubble.title)
+
+                if showsAction {
+                    actionButton(action)
+                        .frame(maxWidth: max(1, bubbleSize.width - 24), alignment: .trailing)
+                        .padding(.trailing, 8)
+                        .padding(.bottom, 6)
+                }
+            }
+            .frame(width: bubbleSize.width, height: bubbleSize.height)
+        } else {
+            bubbleContent
+        }
+    }
+
+    private var bubbleSize: CGSize {
+        Self.size(for: bubble)
+    }
+
+    private var bubbleContent: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(alignment: .top, spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
@@ -1694,13 +1751,6 @@ private struct OpenPetsBubbleContentView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.55 : 0.35), lineWidth: 1)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if showsAction, let action = bubble.action {
-                actionButton(action)
-                    .padding(.trailing, 8)
-                    .padding(.bottom, 6)
-            }
         }
         .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.10), radius: 4, x: 0, y: 1)
     }
@@ -1746,7 +1796,7 @@ private struct OpenPetsBubbleContentView: View {
 
     private func actionButton(_ action: PetBubbleAction) -> some View {
         Button {
-            openActionURL(action.url)
+            action.open(source: "button")
         } label: {
             Text(action.label)
                 .font(.system(size: 10.5, weight: .semibold))
@@ -1765,16 +1815,6 @@ private struct OpenPetsBubbleContentView: View {
         }
         .shadow(color: .black.opacity(colorScheme == .dark ? 0.16 : 0.06), radius: 2, x: 0, y: 1)
         .accessibilityLabel(action.label)
-    }
-
-    private func openActionURL(_ url: URL) {
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        NSWorkspace.shared.open(url, configuration: configuration) { _, error in
-            if let error {
-                NSLog("OpenPets could not open action URL \(url.absoluteString): \(error.localizedDescription)")
-            }
-        }
     }
 
     @ViewBuilder
