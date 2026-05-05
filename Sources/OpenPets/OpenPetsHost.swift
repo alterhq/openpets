@@ -1241,7 +1241,8 @@ final class PetMessagePanelView: NSView {
 }
 
 struct OpenPetsMessageLayout {
-    static let toggleDiameter: CGFloat = 36
+    static let toggleDiameter: CGFloat = 34
+    static let messageShadowOutset: CGFloat = 4
     static let verticalGap: CGFloat = 10
     static let stackGap: CGFloat = 6
     static let toggleGapBelowCard: CGFloat = 4
@@ -1274,6 +1275,16 @@ struct OpenPetsMessageLayout {
             width: closeButtonSize.width,
             height: closeButtonSize.height
         )
+    }
+
+    private static func bounds(for frames: [CGRect]) -> CGRect {
+        frames.reduce(CGRect.null) { partialResult, frame in
+            partialResult.union(frame)
+        }
+    }
+
+    private static func boundsIncludingMessageShadow(for frames: [CGRect]) -> CGRect {
+        bounds(for: frames).insetBy(dx: -messageShadowOutset, dy: -messageShadowOutset)
     }
 
     @MainActor
@@ -1347,13 +1358,15 @@ struct OpenPetsMessageLayout {
             nextY -= stackGap
         }
 
+        let messageFrames = cardFrames + (toggleFrame.isEmpty ? [] : [toggleFrame])
+        let messageMaxY = messageFrames.isEmpty ? 0 : boundsIncludingMessageShadow(for: messageFrames).maxY
         let contentHeight: CGFloat
         if messages.isEmpty {
             contentHeight = spriteSize.height
         } else if isCollapsed {
-            contentHeight = max(spriteSize.height + toggleDiameter / 2, toggleFrame.maxY)
+            contentHeight = max(spriteSize.height + toggleDiameter / 2, messageMaxY)
         } else {
-            contentHeight = max(spriteSize.height, nextY)
+            contentHeight = max(spriteSize.height, nextY, messageMaxY)
         }
 
         return OpenPetsMessageLayout(
@@ -1426,9 +1439,12 @@ struct OpenPetsMessageLayout {
             )
         }
 
-        let occupiedFrames = [petFrame] + cardFrames + (toggleFrame.isEmpty ? [] : [toggleFrame])
-        let contentBounds = occupiedFrames.reduce(CGRect.null) { partialResult, frame in
-            partialResult.union(frame)
+        let messageFrames = cardFrames + (toggleFrame.isEmpty ? [] : [toggleFrame])
+        let contentBounds: CGRect
+        if messageFrames.isEmpty {
+            contentBounds = petFrame
+        } else {
+            contentBounds = petFrame.union(boundsIncludingMessageShadow(for: messageFrames))
         }
         let offset = CGVector(dx: -contentBounds.minX, dy: -contentBounds.minY)
         let normalizedCardFrames = cardFrames.map { $0.offsetBy(dx: offset.dx, dy: offset.dy) }
@@ -1491,9 +1507,7 @@ struct OpenPetsMessageLayout {
             cardFrames[index].origin.y += toggleDiameter + toggleGapBelowCard
         }
         let messageFrames = cardFrames + [toggleFrame]
-        let messageBounds = messageFrames.reduce(CGRect.null) { partialResult, frame in
-            partialResult.union(frame)
-        }
+        let messageBounds = boundsIncludingMessageShadow(for: messageFrames)
         let offset = CGVector(dx: -messageBounds.minX, dy: -messageBounds.minY)
         let normalizedCardFrames = cardFrames.map { $0.offsetBy(dx: offset.dx, dy: offset.dy) }
 
@@ -1627,7 +1641,7 @@ private struct OpenPetsMessageView: View {
             }
             .frame(width: OpenPetsMessageLayout.toggleDiameter, height: OpenPetsMessageLayout.toggleDiameter)
             .contentShape(Circle())
-            .shadow(color: .black.opacity(colorScheme == .dark ? 0.24 : 0.08), radius: 3, x: 0, y: 1)
+            .shadow(color: .black.opacity(colorScheme == .dark ? 0.18 : 0.06), radius: 3, x: 0, y: 1)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(isCollapsed ? "Show messages" : "Hide messages")
@@ -1752,7 +1766,7 @@ private struct OpenPetsBubbleContentView: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(Color(nsColor: .separatorColor).opacity(colorScheme == .dark ? 0.55 : 0.35), lineWidth: 1)
         }
-        .shadow(color: .black.opacity(colorScheme == .dark ? 0.28 : 0.10), radius: 4, x: 0, y: 1)
+        .shadow(color: .black.opacity(colorScheme == .dark ? 0.22 : 0.08), radius: 4, x: 0, y: 1)
     }
 
     static func size(for bubble: PetBubble, maxWidth: CGFloat = 260, messageAreaHeight: CGFloat = 84) -> CGSize {
