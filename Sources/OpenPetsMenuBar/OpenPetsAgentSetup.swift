@@ -1,5 +1,5 @@
 import Foundation
-import OpenPetsCore
+import OpenPetsKit
 
 enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
     case codex

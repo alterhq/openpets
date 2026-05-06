@@ -1,5 +1,5 @@
 import Foundation
-import OpenPetsCore
+import OpenPetsKit
 
 @main
 struct OpenPetsCLI {

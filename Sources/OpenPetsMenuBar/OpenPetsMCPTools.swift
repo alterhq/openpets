@@ -1,6 +1,6 @@
 import Foundation
 import MCP
-import OpenPetsCore
+import OpenPetsKit
 
 func makeOpenPetsMCPServer(controller: OpenPetsMenuBarController) async -> Server {
     let server = Server(

@@ -35,19 +35,19 @@ Start the menu bar app during development:
 swift run openpets-menubar
 ```
 
-Run the CLI against the bundled development pet:
+Run the CLI against a local pet bundle:
 
 ```sh
-swift run openpets run --pet Sources/OpenPets/Resources/Pets/starcorn
+swift run openpets run --pet /path/to/starcorn
 ```
 
 ## Project Layout
 
-- `Sources/OpenPets`: Core pet host, IPC, animation, configuration, and bundled pet loading.
 - `Sources/OpenPetsCLI`: Command-line interface.
 - `Sources/OpenPetsMenuBar`: Menu bar app and MCP HTTP server/tools.
-- `Sources/OpenPets/Resources/Pets`: Bundled pet assets.
-- `Tests/OpenPetsTests`: Unit tests for core behavior, IPC, config, pet bundles, UI layout helpers, and MCP tool metadata.
+- `Tests/OpenPetsTests`: Unit tests for the CLI, menu bar app, assistant setup, release packaging, and MCP tool metadata.
+
+The embeddable runtime, IPC, animation, configuration, host UI, and bundled Starcorn pet live in the separate `OpenPetsKit` package at `https://github.com/alterhq/OpenPetsKit`.
 
 ## Development Workflow
 

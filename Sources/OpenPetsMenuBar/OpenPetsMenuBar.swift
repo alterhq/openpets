@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import Logging
 import MCP
-import OpenPetsCore
+import OpenPetsKit
 import Sparkle
 
 @main

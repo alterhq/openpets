@@ -63,20 +63,20 @@ The shared pet can show multiple task bubbles at once. A `notify` call returns a
 
 See [Shared Pet System](./docs/shared-pet-system.md) for the default socket topology, MCP behavior, `threadId` workflow, and guidance for app integrations.
 
-## Use as a Swift Package
+## Swift App Integration
 
-OpenPets can be added as a library dependency to another Swift package or macOS app. The package product is named `OpenPets`, and the Swift module to import is `OpenPetsCore`.
+Swift apps should use the separate OpenPetsKit package. It contains the embeddable runtime and bundled Starcorn pet without the desktop app, MCP server, Sparkle, SwiftNIO, or MCP Swift SDK dependencies.
 
-In Xcode, add this repository as a package dependency:
+In Xcode, add OpenPetsKit as a package dependency:
 
 ```text
-https://github.com/alterhq/openpets.git
+https://github.com/alterhq/OpenPetsKit.git
 ```
 
-In a `Package.swift` file, add OpenPets to `dependencies`:
+In a `Package.swift` file, add OpenPetsKit to `dependencies`:
 
 ```swift
-.package(url: "https://github.com/alterhq/openpets.git", branch: "main")
+.package(url: "https://github.com/alterhq/OpenPetsKit.git", branch: "main")
 ```
 
 Then add the library product to the target that should send pet commands:
@@ -85,7 +85,7 @@ Then add the library product to the target that should send pet commands:
 .target(
     name: "YourApp",
     dependencies: [
-        .product(name: "OpenPets", package: "openpets")
+        .product(name: "OpenPetsKit", package: "OpenPetsKit")
     ]
 )
 ```
@@ -93,7 +93,7 @@ Then add the library product to the target that should send pet commands:
 Import the module and send commands through the shared local pet socket:
 
 ```swift
-import OpenPetsCore
+import OpenPetsKit
 
 let client = OpenPetsClient()
 
@@ -251,7 +251,7 @@ To install the CLI shim, choose `Install CLI` from the paw menu. This creates `~
 Run a pet from a pet bundle directory:
 
 ```sh
-openpets run --pet Sources/OpenPets/Resources/Pets/starcorn
+openpets run --pet /path/to/starcorn
 ```
 
 Send a notification to a running pet:

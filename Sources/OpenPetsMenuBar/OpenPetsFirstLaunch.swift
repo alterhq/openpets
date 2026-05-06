@@ -1,6 +1,6 @@
 import Darwin
 import Foundation
-import OpenPetsCore
+import OpenPetsKit
 
 protocol OpenPetsPortChecking {
     func isPortAvailable(host: String, port: Int) -> Bool

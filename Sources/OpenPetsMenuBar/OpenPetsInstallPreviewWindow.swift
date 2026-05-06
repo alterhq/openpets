@@ -1,5 +1,5 @@
 import AppKit
-import OpenPetsCore
+import OpenPetsKit
 import SwiftUI
 
 @MainActor
