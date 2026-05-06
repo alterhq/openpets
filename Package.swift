@@ -12,7 +12,7 @@ let package = Package(
         .executable(name: "openpets-menubar", targets: ["OpenPetsMenuBar"])
     ],
     dependencies: [
-        .package(url: "https://github.com/alterhq/OpenPetsKit.git", branch: "main"),
+        .package(url: "https://github.com/alterhq/OpenPetsKit.git", from: "0.1.0"),
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.12.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.12.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.99.0"),

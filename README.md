@@ -46,16 +46,16 @@ Add the recommended assistant instructions so the assistant uses the desktop pet
 
 OpenPets exposes local MCP tools from the menu bar app:
 
-| Tool | Purpose |
-| --- | --- |
-| `get_openpets_status` | Read MCP server, pet, socket, and config status. |
-| `wake_pet` | Start or bring back the desktop pet. |
-| `stop_pet` | Stop the desktop pet. |
-| `notify` | Show or update a threaded message bubble with a status-driven animation. |
-| `play_pet_animation` | Play an animation without showing text. |
-| `stop_pet_animation` | Return the pet to idle without stopping it or clearing messages. |
-| `clear_pet_message` | Clear one message bubble by `threadId`. |
-| `ping_pet` | Confirm the pet process can receive commands. |
+| Tool                  | Purpose                                                                  |
+| --------------------- | ------------------------------------------------------------------------ |
+| `get_openpets_status` | Read MCP server, pet, socket, and config status.                         |
+| `wake_pet`            | Start or bring back the desktop pet.                                     |
+| `stop_pet`            | Stop the desktop pet.                                                    |
+| `notify`              | Show or update a threaded message bubble with a status-driven animation. |
+| `play_pet_animation`  | Play an animation without showing text.                                  |
+| `stop_pet_animation`  | Return the pet to idle without stopping it or clearing messages.         |
+| `clear_pet_message`   | Clear one message bubble by `threadId`.                                  |
+| `ping_pet`            | Confirm the pet process can receive commands.                            |
 
 Valid notification statuses are `running`, `review`, `done`, `failed`, `waiting`, and `message`.
 
@@ -65,7 +65,7 @@ See [Shared Pet System](./docs/shared-pet-system.md) for the default socket topo
 
 ## Swift App Integration
 
-Swift apps should use the separate OpenPetsKit package. It contains the embeddable runtime and bundled Starcorn pet without the desktop app, MCP server, Sparkle, SwiftNIO, or MCP Swift SDK dependencies.
+Swift apps should use the separate OpenPetsKit package. It contains the embeddable runtime and bundled Starcorn pet with minimal dependencies.
 
 In Xcode, add OpenPetsKit as a package dependency:
 
@@ -76,7 +76,7 @@ https://github.com/alterhq/OpenPetsKit.git
 In a `Package.swift` file, add OpenPetsKit to `dependencies`:
 
 ```swift
-.package(url: "https://github.com/alterhq/OpenPetsKit.git", branch: "main")
+.package(url: "https://github.com/alterhq/OpenPetsKit.git", from: "0.1.0")
 ```
 
 Then add the library product to the target that should send pet commands:
@@ -157,14 +157,14 @@ Default configuration:
 
 ```json
 {
-  "display" : {
-    "messageAreaHeight" : 56,
-    "scale" : 0.42
+  "display": {
+    "messageAreaHeight": 56,
+    "scale": 0.42
   },
-  "mcpEndpoint" : "/mcp",
-  "mcpHost" : "127.0.0.1",
-  "mcpPort" : 3001,
-  "socketPath" : "/tmp/openpets-UID.sock"
+  "mcpEndpoint": "/mcp",
+  "mcpHost": "127.0.0.1",
+  "mcpPort": 3001,
+  "socketPath": "/tmp/openpets-UID.sock"
 }
 ```
 
@@ -228,17 +228,17 @@ Manifest format:
 
 Spritesheets are expected to use an 8 column by 9 row atlas. The current animation rows are:
 
-| Row | Animation |
-| --- | --- |
-| 0 | `idle` |
-| 1 | `running-right` |
-| 2 | `running-left` |
-| 3 | `waving` |
-| 4 | `jumping` |
-| 5 | `failed` |
-| 6 | `waiting` |
-| 7 | `running` |
-| 8 | `review` |
+| Row | Animation       |
+| --- | --------------- |
+| 0   | `idle`          |
+| 1   | `running-right` |
+| 2   | `running-left`  |
+| 3   | `waving`        |
+| 4   | `jumping`       |
+| 5   | `failed`        |
+| 6   | `waiting`       |
+| 7   | `running`       |
+| 8   | `review`        |
 
 The spritesheet width must be divisible by 8 and the height must be divisible by 9.
 
