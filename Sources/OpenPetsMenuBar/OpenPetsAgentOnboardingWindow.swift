@@ -25,7 +25,7 @@ final class OpenPetsAgentOnboardingWindowController: NSWindowController, NSWindo
         self.installer = installer
 
         let window = NSWindow(
-            contentRect: CGRect(x: 0, y: 0, width: 520, height: 480),
+            contentRect: CGRect(x: 0, y: 0, width: 520, height: 540),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -81,7 +81,7 @@ final class OpenPetsAgentOnboardingWindowController: NSWindowController, NSWindo
     }
 
     private func showSetupScreen() {
-        window?.setContentSize(CGSize(width: 520, height: 480))
+        window?.setContentSize(CGSize(width: 520, height: 540))
         replaceContentSubviews()
 
         let titleLabel = NSTextField(labelWithString: "Connect OpenPets to your coding agents.")
@@ -587,6 +587,7 @@ final class OpenPetsAgentOnboardingWindowController: NSWindowController, NSWindo
 @MainActor
 private final class OpenPetsAgentRowView: NSView {
     let actionButton = NSButton(title: "", target: nil, action: nil)
+    private let logoImageView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private let statusIcon = NSImageView()
@@ -627,7 +628,9 @@ private final class OpenPetsAgentRowView: NSView {
         labelsStack.addArrangedSubview(titleLabel)
         labelsStack.addArrangedSubview(detailLabel)
 
+        logoImageView.imageScaling = .scaleProportionallyUpOrDown
         stack.addArrangedSubview(statusIcon)
+        stack.addArrangedSubview(logoImageView)
         stack.addArrangedSubview(labelsStack)
         stack.addArrangedSubview(actionButton)
         labelsStack.setHuggingPriority(.defaultLow, for: .horizontal)
@@ -639,6 +642,8 @@ private final class OpenPetsAgentRowView: NSView {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
             statusIcon.widthAnchor.constraint(equalToConstant: 18),
             statusIcon.heightAnchor.constraint(equalToConstant: 18),
+            logoImageView.widthAnchor.constraint(equalToConstant: 28),
+            logoImageView.heightAnchor.constraint(equalToConstant: 28),
             heightAnchor.constraint(greaterThanOrEqualToConstant: 52)
         ])
 
@@ -648,6 +653,7 @@ private final class OpenPetsAgentRowView: NSView {
     }
 
     private func update(_ detection: OpenPetsAgentDetection) {
+        logoImageView.image = OpenPetsAgentLogo.image(for: detection.kind, executableURL: detection.executableURL)
         titleLabel.stringValue = "\(detection.kind.displayName) - \(stateLabel(detection.state))"
         detailLabel.stringValue = userFacingDetail(for: detection)
         statusIcon.isHidden = detection.state != .configured
@@ -708,6 +714,7 @@ private final class OpenPetsAgentRowView: NSView {
 @MainActor
 private final class OpenPetsInstructionTargetRowView: NSView {
     let appendButton = NSButton(title: "Append", target: nil, action: nil)
+    private let logoImageView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let pathLabel = NSTextField(labelWithString: "")
 
@@ -742,6 +749,8 @@ private final class OpenPetsInstructionTargetRowView: NSView {
 
         labelsStack.addArrangedSubview(titleLabel)
         labelsStack.addArrangedSubview(pathLabel)
+        logoImageView.imageScaling = .scaleProportionallyUpOrDown
+        stack.addArrangedSubview(logoImageView)
         stack.addArrangedSubview(labelsStack)
         stack.addArrangedSubview(appendButton)
         labelsStack.setHuggingPriority(.defaultLow, for: .horizontal)
@@ -751,6 +760,8 @@ private final class OpenPetsInstructionTargetRowView: NSView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             stack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            logoImageView.widthAnchor.constraint(equalToConstant: 24),
+            logoImageView.heightAnchor.constraint(equalToConstant: 24),
             heightAnchor.constraint(greaterThanOrEqualToConstant: 48)
         ])
 
@@ -760,8 +771,115 @@ private final class OpenPetsInstructionTargetRowView: NSView {
     }
 
     private func update(_ target: OpenPetsInstructionTarget) {
+        logoImageView.image = OpenPetsAgentLogo.image(for: target.kind, executableURL: nil)
         titleLabel.stringValue = target.displayName
         pathLabel.stringValue = target.fileURL.path
+        appendButton.title = "Append"
+    }
+}
+
+private enum OpenPetsAgentLogo {
+    static func image(for kind: OpenPetsAgentKind, executableURL: URL?) -> NSImage {
+        if let bundledLogo = bundledLogo(for: kind) {
+            return bundledLogo
+        }
+        if let appIcon = appIcon(for: executableURL) {
+            return appIcon
+        }
+        return badge(for: kind)
+    }
+
+    private static func bundledLogo(for kind: OpenPetsAgentKind) -> NSImage? {
+        guard let url = Bundle.module.url(
+            forResource: kind.logoResourceName,
+            withExtension: "png"
+        ), let image = NSImage(contentsOf: url) else {
+            return nil
+        }
+        image.size = CGSize(width: 28, height: 28)
+        return image
+    }
+
+    private static func appIcon(for executableURL: URL?) -> NSImage? {
+        guard let executableURL else { return nil }
+        var candidateURL = executableURL.resolvingSymlinksInPath()
+        while candidateURL.path != "/" {
+            if candidateURL.pathExtension == "app" {
+                let image = NSWorkspace.shared.icon(forFile: candidateURL.path)
+                image.size = CGSize(width: 28, height: 28)
+                return image
+            }
+            candidateURL.deleteLastPathComponent()
+        }
+        return nil
+    }
+
+    private static func badge(for kind: OpenPetsAgentKind) -> NSImage {
+        let size = CGSize(width: 28, height: 28)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        let rect = CGRect(origin: .zero, size: size)
+        kind.logoBackgroundColor.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 7, yRadius: 7).fill()
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .center
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: kind.logoText.count > 1 ? 10 : 14, weight: .bold),
+            .foregroundColor: NSColor.white,
+            .paragraphStyle: paragraphStyle
+        ]
+        let textRect = CGRect(x: 0, y: kind.logoText.count > 1 ? 7 : 5, width: size.width, height: 16)
+        kind.logoText.draw(in: textRect, withAttributes: attributes)
+        image.unlockFocus()
+        return image
+    }
+}
+
+private extension OpenPetsAgentKind {
+    var logoText: String {
+        switch self {
+        case .codex:
+            "Cx"
+        case .claude:
+            "C"
+        case .pi:
+            "Pi"
+        case .openCode:
+            "OC"
+        case .zed:
+            "Z"
+        }
+    }
+
+    var logoResourceName: String {
+        switch self {
+        case .codex:
+            "codex"
+        case .claude:
+            "claude"
+        case .pi:
+            "pi"
+        case .openCode:
+            "opencode"
+        case .zed:
+            "zed"
+        }
+    }
+
+    var logoBackgroundColor: NSColor {
+        switch self {
+        case .codex:
+            NSColor(calibratedRed: 0.08, green: 0.11, blue: 0.13, alpha: 1)
+        case .claude:
+            NSColor(calibratedRed: 0.80, green: 0.39, blue: 0.22, alpha: 1)
+        case .pi:
+            NSColor(calibratedRed: 0.08, green: 0.46, blue: 0.88, alpha: 1)
+        case .openCode:
+            NSColor(calibratedRed: 0.26, green: 0.18, blue: 0.72, alpha: 1)
+        case .zed:
+            NSColor(calibratedRed: 0.04, green: 0.50, blue: 0.44, alpha: 1)
+        }
     }
 }
 

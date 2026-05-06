@@ -6,6 +6,7 @@ enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
     case claude
     case pi
     case openCode
+    case zed
 
     var displayName: String {
         switch self {
@@ -17,6 +18,8 @@ enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
             "Pi"
         case .openCode:
             "OpenCode"
+        case .zed:
+            "Zed"
         }
     }
 
@@ -30,6 +33,8 @@ enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
             "pi"
         case .openCode:
             "opencode"
+        case .zed:
+            "zed"
         }
     }
 
@@ -43,6 +48,8 @@ enum OpenPetsAgentKind: CaseIterable, Equatable, Hashable, Sendable {
             URL(string: "https://pi.dev/packages/pi-mcp-extension")!
         case .openCode:
             URL(string: "https://opencode.ai/docs/")!
+        case .zed:
+            URL(string: "https://zed.dev/docs/ai/mcp")!
         }
     }
 }
@@ -137,6 +144,7 @@ struct OpenPetsAgentDetector: Sendable {
     var claudeConfigurationURL: URL
     var piMCPConfigurationURL: URL
     var openCodeConfigurationURL: URL
+    var zedConfigurationURL: URL
 
     init(
         processRunner: OpenPetsProcessRunning = OpenPetsDefaultProcessRunner(),
@@ -154,7 +162,11 @@ struct OpenPetsAgentDetector: Sendable {
         openCodeConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("opencode", isDirectory: true)
-            .appendingPathComponent("opencode.json")
+            .appendingPathComponent("opencode.json"),
+        zedConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("zed", isDirectory: true)
+            .appendingPathComponent("settings.json")
     ) {
         self.processRunner = processRunner
         self.shellURL = shellURL
@@ -163,6 +175,7 @@ struct OpenPetsAgentDetector: Sendable {
         self.claudeConfigurationURL = claudeConfigurationURL
         self.piMCPConfigurationURL = piMCPConfigurationURL
         self.openCodeConfigurationURL = openCodeConfigurationURL
+        self.zedConfigurationURL = zedConfigurationURL
     }
 
     func detectAll(mcpURL: String) -> [OpenPetsAgentDetection] {
@@ -238,6 +251,8 @@ struct OpenPetsAgentDetector: Sendable {
             return piConfiguredState(executableURL: executableURL, mcpURL: mcpURL)
         case .openCode:
             return openCodeConfiguredState(executableURL: executableURL, mcpURL: mcpURL)
+        case .zed:
+            return zedConfiguredState(executableURL: executableURL, mcpURL: mcpURL)
         }
     }
 
@@ -301,6 +316,31 @@ struct OpenPetsAgentDetector: Sendable {
             name: "openpets"
         )?["url"] as? String else {
             return (.installed, "Installed at \(executableURL.path). OpenPets MCP is not configured yet.")
+        }
+
+        if configuredURL == mcpURL {
+            return (.configured, "OpenPets MCP is configured at \(mcpURL).")
+        }
+        return (.configuredDifferentURL, "OpenPets MCP exists, but should be updated to the current server URL.")
+    }
+
+    private func zedConfiguredState(
+        executableURL: URL,
+        mcpURL: String
+    ) -> (state: OpenPetsAgentSetupState, detail: String) {
+        guard let server = userMCPServer(
+            in: zedConfigurationURL,
+            sectionKey: "context_servers",
+            name: "openpets",
+            allowJSONC: true
+        ), let configuredURL = server["url"] as? String else {
+            return (.installed, "Installed at \(executableURL.path). OpenPets MCP is not configured yet.")
+        }
+
+        let headers = server["headers"] as? [String: Any]
+        let authorizationHeader = headers?["Authorization"] as? String
+        guard authorizationHeader?.isEmpty == false else {
+            return (.configuredDifferentURL, "OpenPets MCP exists, but should be updated to avoid Zed OAuth prompts.")
         }
 
         if configuredURL == mcpURL {
@@ -430,6 +470,10 @@ private extension OpenPetsAgentDetector {
             return [
                 openCodeConfigurationURL.deletingLastPathComponent()
             ]
+        case .zed:
+            return [
+                zedConfigurationURL.deletingLastPathComponent()
+            ]
         }
     }
 
@@ -501,6 +545,7 @@ struct OpenPetsAgentSetupInstaller: Sendable {
     var processRunner: OpenPetsProcessRunning
     var piMCPConfigurationURL: URL
     var openCodeConfigurationURL: URL
+    var zedConfigurationURL: URL
 
     init(
         processRunner: OpenPetsProcessRunning = OpenPetsDefaultProcessRunner(),
@@ -511,11 +556,16 @@ struct OpenPetsAgentSetupInstaller: Sendable {
         openCodeConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("opencode", isDirectory: true)
-            .appendingPathComponent("opencode.json")
+            .appendingPathComponent("opencode.json"),
+        zedConfigurationURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("zed", isDirectory: true)
+            .appendingPathComponent("settings.json")
     ) {
         self.processRunner = processRunner
         self.piMCPConfigurationURL = piMCPConfigurationURL
         self.openCodeConfigurationURL = openCodeConfigurationURL
+        self.zedConfigurationURL = zedConfigurationURL
     }
 
     func command(kind: OpenPetsAgentKind, executableURL: URL, mcpURL: String) -> OpenPetsAgentInstallCommand {
@@ -546,6 +596,12 @@ struct OpenPetsAgentSetupInstaller: Sendable {
                 arguments: [],
                 previewTextOverride: "Write \(configurationURL.path) with mcp.openpets.url = \(mcpURL)"
             )
+        case .zed:
+            return OpenPetsAgentInstallCommand(
+                executableURL: executableURL,
+                arguments: [],
+                previewTextOverride: "Write \(zedConfigurationURL.path) with context_servers.openpets.url = \(mcpURL) and a local Authorization header"
+            )
         }
     }
 
@@ -574,11 +630,35 @@ struct OpenPetsAgentSetupInstaller: Sendable {
                 arguments: [],
                 previewTextOverride: "Remove mcp.openpets from \(configurationURL.path)"
             )
+        case .zed:
+            return OpenPetsAgentInstallCommand(
+                executableURL: executableURL,
+                arguments: [],
+                previewTextOverride: "Remove context_servers.openpets from \(zedConfigurationURL.path)"
+            )
         }
     }
 
     func install(kind: OpenPetsAgentKind, executableURL: URL, mcpURL: String) throws -> OpenPetsAgentInstallResult {
         let installCommand = command(kind: kind, executableURL: executableURL, mcpURL: mcpURL)
+        if kind == .zed {
+            try OpenPetsMCPJSONConfiguration.upsertZedRemoteServer(
+                name: "openpets",
+                url: mcpURL,
+                in: zedConfigurationURL
+            )
+            return OpenPetsAgentInstallResult(
+                kind: kind,
+                operation: .install,
+                command: installCommand,
+                processResult: OpenPetsProcessResult(
+                    terminationStatus: 0,
+                    standardOutput: "",
+                    standardError: ""
+                )
+            )
+        }
+
         if kind == .openCode {
             let configurationURL = openCodeWritableConfigurationURL()
             try OpenPetsMCPJSONConfiguration.upsertOpenCodeRemoteServer(
@@ -632,6 +712,24 @@ struct OpenPetsAgentSetupInstaller: Sendable {
 
     func uninstall(kind: OpenPetsAgentKind, executableURL: URL) throws -> OpenPetsAgentInstallResult {
         let command = uninstallCommand(kind: kind, executableURL: executableURL)
+        if kind == .zed {
+            try OpenPetsMCPJSONConfiguration.removeServer(
+                name: "openpets",
+                sectionKey: "context_servers",
+                from: zedConfigurationURL
+            )
+            return OpenPetsAgentInstallResult(
+                kind: kind,
+                operation: .uninstall,
+                command: command,
+                processResult: OpenPetsProcessResult(
+                    terminationStatus: 0,
+                    standardOutput: "",
+                    standardError: ""
+                )
+            )
+        }
+
         if kind == .openCode {
             let configurationURL = openCodeWritableConfigurationURL()
             try OpenPetsMCPJSONConfiguration.removeServer(
@@ -835,8 +933,21 @@ private enum OpenPetsMCPJSONConfiguration {
         try writeJSONObject(json, to: configurationURL)
     }
 
+    static func upsertZedRemoteServer(name: String, url: String, in configurationURL: URL) throws {
+        var json = try readJSONObject(from: configurationURL, allowJSONC: true)
+        var servers = json["context_servers"] as? [String: Any] ?? [:]
+        var server = servers[name] as? [String: Any] ?? [:]
+        var headers = server["headers"] as? [String: Any] ?? [:]
+        headers["Authorization"] = "Bearer openpets-local"
+        server["url"] = url
+        server["headers"] = headers
+        servers[name] = server
+        json["context_servers"] = servers
+        try writeJSONObject(json, to: configurationURL)
+    }
+
     static func removeServer(name: String, sectionKey: String, from configurationURL: URL) throws {
-        var json = try readJSONObject(from: configurationURL, allowJSONC: sectionKey == "mcp")
+        var json = try readJSONObject(from: configurationURL, allowJSONC: ["context_servers", "mcp"].contains(sectionKey))
         guard var servers = json[sectionKey] as? [String: Any] else { return }
         servers.removeValue(forKey: name)
         json[sectionKey] = servers

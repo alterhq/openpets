@@ -6,6 +6,7 @@ Copy the shared snippet below into your assistant's persistent system, developer
 
 | Assistant | Setup Guide | Where to Paste |
 | --- | --- | --- |
+| Zed | [zed.md](./zed.md) | Project `.rules` file or Rules Library |
 | OpenCode | [opencode.md](./opencode.md) | `~/.config/opencode/AGENTS.md` |
 | Claude Code | [claude-code.md](./claude-code.md) | User or project instructions |
 | Cursor | [cursor.md](./cursor.md) | Project Rules, `AGENTS.md`, User Rules, or Team Rules |

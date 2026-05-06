@@ -235,6 +235,22 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertGreaterThan(try Data(contentsOf: iconURL).count, 0)
     }
 
+    func testReleasePackageIncludesMenuBarResourceBundle() throws {
+        let rootURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let scriptURL = rootURL.appendingPathComponent("scripts/package-release.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        XCTAssertTrue(script.contains("OpenPets_OpenPetsMenuBar.bundle"))
+        XCTAssertTrue(script.contains("OpenPets_OpenPetsMenuBar.bundle/codex.png"))
+        XCTAssertTrue(script.contains("OpenPets_OpenPetsMenuBar.bundle/claude.png"))
+        XCTAssertTrue(script.contains("OpenPets_OpenPetsMenuBar.bundle/pi.png"))
+        XCTAssertTrue(script.contains("OpenPets_OpenPetsMenuBar.bundle/opencode.png"))
+        XCTAssertTrue(script.contains("OpenPets_OpenPetsMenuBar.bundle/zed.png"))
+    }
+
     func testSpriteFrameStoreReusesCachedAssets() throws {
         let image = try makeAlphaTestImage(width: 2, height: 1, alphas: [0, 255])
         let store = PetSpriteFrameStore(frames: [.idle: [image]], spriteSize: CGSize(width: 20, height: 10))
@@ -1613,6 +1629,86 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(detection.state, .configured)
     }
 
+    func testAgentDetectorFindsConfiguredZedMCP() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let zedURL = try makeExecutable(named: "zed", in: directory)
+        let zedConfigURL = directory.appendingPathComponent(".config/zed/settings.json")
+        let mcpURL = "http://127.0.0.1:3010/mcp"
+        try writeZedSettings(to: zedConfigURL, mcpURL: mcpURL)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            zedConfigurationURL: zedConfigURL
+        ).detect(.zed, mcpURL: mcpURL)
+
+        XCTAssertEqual(detection.state, .configured)
+        XCTAssertEqual(detection.executableURL?.path, zedURL.path)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
+    func testAgentDetectorReportsDifferentConfiguredZedURL() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try makeExecutable(named: "zed", in: directory)
+        let zedConfigURL = directory.appendingPathComponent(".config/zed/settings.json")
+        try writeZedSettings(to: zedConfigURL, mcpURL: "http://127.0.0.1:3001/mcp")
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            zedConfigurationURL: zedConfigURL
+        ).detect(.zed, mcpURL: "http://127.0.0.1:3010/mcp")
+
+        XCTAssertEqual(detection.state, .configuredDifferentURL)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
+    func testAgentDetectorReadsZedJSONCSettings() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try makeExecutable(named: "zed", in: directory)
+        let zedConfigURL = directory.appendingPathComponent(".config/zed/settings.json")
+        let mcpURL = "http://127.0.0.1:3010/mcp"
+        try writeZedJSONCSettings(to: zedConfigURL, mcpURL: mcpURL)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            zedConfigurationURL: zedConfigURL
+        ).detect(.zed, mcpURL: mcpURL)
+
+        XCTAssertEqual(detection.state, .configured)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
+    func testAgentDetectorReportsZedMCPWithoutAuthorizationHeaderAsUpdateNeeded() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try makeExecutable(named: "zed", in: directory)
+        let zedConfigURL = directory.appendingPathComponent(".config/zed/settings.json")
+        let mcpURL = "http://127.0.0.1:3010/mcp"
+        try writeZedSettings(to: zedConfigURL, mcpURL: mcpURL, includeAuthorizationHeader: false)
+        let runner = FakeProcessRunner(responses: [:])
+
+        let detection = OpenPetsAgentDetector(
+            processRunner: runner,
+            shellURL: URL(fileURLWithPath: "/bin/zsh"),
+            searchDirectories: [directory],
+            zedConfigurationURL: zedConfigURL
+        ).detect(.zed, mcpURL: mcpURL)
+
+        XCTAssertEqual(detection.state, .configuredDifferentURL)
+        XCTAssertTrue(runner.recordedInvocations.isEmpty)
+    }
+
     func testAgentDetectorUsesNonInteractiveShellOnlyAfterFastPathMissesTool() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -1713,6 +1809,14 @@ final class OpenPetsTests: XCTestCase {
             ).arguments,
             []
         )
+        XCTAssertEqual(
+            installer.command(
+                kind: .zed,
+                executableURL: URL(fileURLWithPath: "/usr/local/bin/zed"),
+                mcpURL: mcpURL
+            ).arguments,
+            []
+        )
     }
 
     func testAgentSetupInstallerBuildsUninstallCommands() {
@@ -1743,6 +1847,13 @@ final class OpenPetsTests: XCTestCase {
             installer.uninstallCommand(
                 kind: .openCode,
                 executableURL: URL(fileURLWithPath: "/usr/local/bin/opencode")
+            ).arguments,
+            []
+        )
+        XCTAssertEqual(
+            installer.uninstallCommand(
+                kind: .zed,
+                executableURL: URL(fileURLWithPath: "/usr/local/bin/zed")
             ).arguments,
             []
         )
@@ -1902,6 +2013,52 @@ final class OpenPetsTests: XCTestCase {
         )
     }
 
+    func testAgentSetupInstallerWritesZedMCPConfig() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent(".config/zed/settings.json")
+        try writeZedSettings(to: configURL, mcpURL: "http://127.0.0.1:3001/mcp")
+        let installer = OpenPetsAgentSetupInstaller(
+            processRunner: FakeProcessRunner(responses: [:]),
+            zedConfigurationURL: configURL
+        )
+
+        let result = try installer.install(
+            kind: .zed,
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/zed"),
+            mcpURL: "http://127.0.0.1:3010/mcp"
+        )
+
+        XCTAssertTrue(result.succeeded)
+        let configuredURL = try mcpServerURL(in: configURL, sectionKey: "context_servers", name: "openpets")
+        XCTAssertEqual(configuredURL, "http://127.0.0.1:3010/mcp")
+        XCTAssertEqual(
+            try mcpServerHeader(in: configURL, sectionKey: "context_servers", name: "openpets", header: "Authorization"),
+            "Bearer openpets-local"
+        )
+    }
+
+    func testAgentSetupInstallerUpdatesZedJSONCSettings() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent(".config/zed/settings.json")
+        try writeZedJSONCSettings(to: configURL, mcpURL: "http://127.0.0.1:3001/mcp")
+        let installer = OpenPetsAgentSetupInstaller(
+            processRunner: FakeProcessRunner(responses: [:]),
+            zedConfigurationURL: configURL
+        )
+
+        let result = try installer.install(
+            kind: .zed,
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/zed"),
+            mcpURL: "http://127.0.0.1:3010/mcp"
+        )
+
+        XCTAssertTrue(result.succeeded)
+        let configuredURL = try mcpServerURL(in: configURL, sectionKey: "context_servers", name: "openpets")
+        XCTAssertEqual(configuredURL, "http://127.0.0.1:3010/mcp")
+    }
+
     func testAgentSetupInstallerReturnsUninstallResult() throws {
         let commandKey = FakeProcessRunner.key(
             "/usr/local/bin/claude",
@@ -1961,6 +2118,26 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(result.message, "OpenCode MCP setup removed.")
     }
 
+    func testAgentSetupInstallerUninstallsZedMCPConfig() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configURL = directory.appendingPathComponent(".config/zed/settings.json")
+        try writeZedSettings(to: configURL, mcpURL: "http://127.0.0.1:3010/mcp")
+        let installer = OpenPetsAgentSetupInstaller(
+            processRunner: FakeProcessRunner(responses: [:]),
+            zedConfigurationURL: configURL
+        )
+
+        let result = try installer.uninstall(
+            kind: .zed,
+            executableURL: URL(fileURLWithPath: "/usr/local/bin/zed")
+        )
+
+        XCTAssertTrue(result.succeeded)
+        XCTAssertNil(try mcpServerURL(in: configURL, sectionKey: "context_servers", name: "openpets"))
+        XCTAssertEqual(result.message, "Zed MCP setup removed.")
+    }
+
     func testAssistantInstructionsTargetsIncludePi() throws {
         let targets = OpenPetsAssistantInstructions.globalInstructionTargets(for: [.pi])
 
@@ -1977,6 +2154,12 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(targets.first?.displayName, "OpenCode global instructions")
         XCTAssertEqual(targets.first?.fileURL.lastPathComponent, "AGENTS.md")
         XCTAssertTrue(targets.first?.fileURL.path.contains(".config/opencode") == true)
+    }
+
+    func testAssistantInstructionsTargetsExcludeZed() throws {
+        let targets = OpenPetsAssistantInstructions.globalInstructionTargets(for: [.zed])
+
+        XCTAssertTrue(targets.isEmpty)
     }
 
     func testAssistantInstructionsSnippetMatchesSharedGuidance() {
@@ -2425,12 +2608,68 @@ final class OpenPetsTests: XCTestCase {
         ).write(to: url)
     }
 
+    private func writeZedSettings(
+        to url: URL,
+        mcpURL: String,
+        includeAuthorizationHeader: Bool = true
+    ) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var openPetsServer: [String: Any] = [
+            "url": mcpURL
+        ]
+        if includeAuthorizationHeader {
+            openPetsServer["headers"] = [
+                "Authorization": "Bearer openpets-local"
+            ]
+        }
+        let object: [String: Any] = [
+            "theme": "Ayu Dark",
+            "context_servers": [
+                "openpets": openPetsServer,
+                "other": [
+                    "url": "https://example.test/mcp"
+                ]
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url)
+    }
+
+    private func writeZedJSONCSettings(to url: URL, mcpURL: String) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(
+            """
+            // Zed settings support JSONC comments.
+            {
+              "theme": "Ayu Dark",
+              "context_servers": {
+                "openpets": {
+                  "url": "\(mcpURL)",
+                  "headers": {
+                    "Authorization": "Bearer openpets-local",
+                  },
+                },
+              },
+            }
+            """.utf8
+        ).write(to: url)
+    }
+
     private func mcpServerURL(in url: URL, sectionKey: String, name: String) throws -> String? {
         let data = try Data(contentsOf: url)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let servers = try XCTUnwrap(json[sectionKey] as? [String: Any])
         let server = servers[name] as? [String: Any]
         return server?["url"] as? String
+    }
+
+    private func mcpServerHeader(in url: URL, sectionKey: String, name: String, header: String) throws -> String? {
+        let data = try Data(contentsOf: url)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let servers = try XCTUnwrap(json[sectionKey] as? [String: Any])
+        let server = try XCTUnwrap(servers[name] as? [String: Any])
+        let headers = server["headers"] as? [String: Any]
+        return headers?[header] as? String
     }
 
     private func schemaProperty(toolName: String, propertyName: String) throws -> [String: Value] {

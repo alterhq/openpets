@@ -42,7 +42,10 @@ let package = Package(
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "Sparkle", package: "Sparkle")
             ],
-            path: "Sources/OpenPetsMenuBar"
+            path: "Sources/OpenPetsMenuBar",
+            resources: [
+                .process("Resources")
+            ]
         ),
         .testTarget(
             name: "OpenPetsTests",
