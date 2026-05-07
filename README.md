@@ -4,6 +4,8 @@ OpenPets is a native macOS desktop pet for visible agent progress, review prompt
 
 It gives Codex Pets a shared home outside one assistant. The menu bar app, MCP server, CLI, and apps built with [OpenPetsKit](https://github.com/alterhq/OpenPetsKit) can all talk to the same local pet, so Codex, Claude Code, Cursor, OpenCode, Pi CLI, generic MCP clients, local apps, and scripts can report work through one visible desktop companion.
 
+https://github.com/user-attachments/assets/a12fc67e-c82c-488c-9480-e51826995c75
+
 This repository is the desktop app, CLI, MCP server, assistant setup, and release packaging project. If you are embedding OpenPets in your own Swift app, use [OpenPetsKit](https://github.com/alterhq/OpenPetsKit), the separate Swift package for the embeddable runtime and client APIs.
 
 ## Install
