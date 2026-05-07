@@ -2,7 +2,9 @@
 
 OpenPets is a native macOS desktop pet for visible agent progress, review prompts, completion states, and lightweight animations across local coding tools.
 
-It gives Codex Pets a shared home outside one assistant. The menu bar app, MCP server, Swift package, and CLI can all talk to the same local pet, so Codex, Claude Code, Cursor, OpenCode, Pi CLI, generic MCP clients, local apps, and scripts can report work through one visible desktop companion.
+It gives Codex Pets a shared home outside one assistant. The menu bar app, MCP server, CLI, and apps built with [OpenPetsKit](https://github.com/alterhq/OpenPetsKit) can all talk to the same local pet, so Codex, Claude Code, Cursor, OpenCode, Pi CLI, generic MCP clients, local apps, and scripts can report work through one visible desktop companion.
+
+This repository is the desktop app, CLI, MCP server, assistant setup, and release packaging project. If you are embedding OpenPets in your own Swift app, use [OpenPetsKit](https://github.com/alterhq/OpenPetsKit), the separate Swift package for the embeddable runtime and client APIs.
 
 ## Install
 
@@ -37,7 +39,6 @@ Add the recommended assistant instructions so the assistant uses the desktop pet
 - Plugin ecosystem for assistant and local tool behaviors.
 - Catalog of apps and agents using OpenPets.
 - Pet catalog and gallery improvements for discovering and installing compatible pet bundles.
-- Dedicated Swift package distribution for apps that only need the OpenPets client APIs.
 - Easier assistant onboarding for Codex, Claude Code, Cursor, OpenCode, Pi CLI, and generic MCP clients.
 - Richer task states with action buttons and shared task workflows.
 - Continued focus on one shared local desktop companion across multiple tools.
@@ -65,7 +66,7 @@ See [Shared Pet System](./docs/shared-pet-system.md) for the default socket topo
 
 ## Swift App Integration
 
-Swift apps should use the separate OpenPetsKit package. It contains the embeddable runtime and bundled Starcorn pet with minimal dependencies.
+Swift apps should use [OpenPetsKit](https://github.com/alterhq/OpenPetsKit), the separate Swift package for embedding OpenPets. It contains the embeddable runtime, client APIs, and bundled Starcorn pet with minimal dependencies.
 
 In Xcode, add OpenPetsKit as a package dependency:
 
