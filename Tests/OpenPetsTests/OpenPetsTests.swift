@@ -85,12 +85,16 @@ final class OpenPetsTests: XCTestCase {
         let pluginsItem = try XCTUnwrap(menu.items.first { $0.title == "Plugins" })
         let submenu = try XCTUnwrap(pluginsItem.submenu)
 
-        XCTAssertEqual(submenu.items.map(\.title), ["Battery", "Claude Code"])
+        XCTAssertEqual(submenu.items.map(\.title), ["Battery", "Claude Code", "Codex Usage"])
         XCTAssertTrue(submenu.items.allSatisfy { $0.action != nil })
         XCTAssertEqual(submenu.items.first { $0.title == "Battery" }?.representedObject as? String, OpenPetsBatterySurfacePlugin.pluginID)
         XCTAssertEqual(
             submenu.items.first { $0.title == "Claude Code" }?.representedObject as? String,
             OpenPetsClaudeCodeSurfacePlugin.pluginID
+        )
+        XCTAssertEqual(
+            submenu.items.first { $0.title == "Codex Usage" }?.representedObject as? String,
+            OpenPetsCodexUsageSurfacePlugin.pluginID
         )
     }
 
@@ -274,7 +278,7 @@ final class OpenPetsTests: XCTestCase {
         ])
     }
 
-    func testBatterySurfacePluginKeepsChargingBatteryAsSuccessCloudSurface() {
+    func testBatterySurfacePluginKeepsChargingBatteryAsSuccessCloudSurfaceWithoutReaction() {
         let updates = OpenPetsBatterySurfacePlugin.surfaceUpdates(for: OpenPetsBatterySnapshot(
             percent: 82,
             isCharging: true,
@@ -293,16 +297,25 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(badge.detail?.rows.first { $0.label == "State" }?.value, "Plugged")
         XCTAssertEqual(badge.detail?.rows.first { $0.label == "Full" }?.value, "48m")
 
-        XCTAssertEqual(OpenPetsBatterySurfacePlugin.reactionUpdates(for: OpenPetsBatterySnapshot(
+        XCTAssertTrue(OpenPetsBatterySurfacePlugin.reactionUpdates(for: OpenPetsBatterySnapshot(
             percent: 82,
             isCharging: true,
             isPlugged: true,
             isPresent: true,
             timeRemainingMinutes: nil,
             timeToFullChargeMinutes: 48
-        )), [
-            OpenPetsPetReactionUpdate(reactionID: "battery.charging", kind: .charging, priority: 20)
-        ])
+        )).isEmpty)
+    }
+
+    func testBatterySurfacePluginDoesNotEmitChargingReactionBelowEightyPercent() {
+        XCTAssertTrue(OpenPetsBatterySurfacePlugin.reactionUpdates(for: OpenPetsBatterySnapshot(
+            percent: 64,
+            isCharging: true,
+            isPlugged: true,
+            isPresent: true,
+            timeRemainingMinutes: nil,
+            timeToFullChargeMinutes: 42
+        )).isEmpty)
     }
 
     func testBatterySurfacePluginReturnsNoSurfacesWhenBatteryMissing() {
@@ -484,6 +497,123 @@ final class OpenPetsTests: XCTestCase {
                 reactionID: "claude.quota-critical",
                 kind: .alert,
                 priority: 80,
+                ttlSeconds: 20
+            )
+        ])
+    }
+
+    func testCodexUsageReaderParsesLiveRateLimitPayload() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let data = Data(
+            """
+            {
+              "limits": {
+                "primary": {
+                  "used_percent": 42.8,
+                  "window_minutes": 300,
+                  "resets_in_seconds": 5400
+                },
+                "secondary": {
+                  "used_percent": 18,
+                  "window_minutes": 10080,
+                  "resets_in_seconds": 259200
+                },
+                "additional": {
+                  "used_percent": 8,
+                  "window_minutes": 43200,
+                  "resets_in_seconds": 864000
+                }
+              }
+            }
+            """.utf8
+        )
+
+        let snapshot = try XCTUnwrap(OpenPetsCodexUsageReader.snapshot(fromLiveUsageData: data, now: now))
+
+        XCTAssertEqual(snapshot.source, "live")
+        XCTAssertEqual(snapshot.primary?.label, "5h")
+        XCTAssertEqual(snapshot.primary?.usedPercentage, 42)
+        XCTAssertEqual(snapshot.primary?.resetDate, now.addingTimeInterval(5400))
+        XCTAssertEqual(snapshot.secondary?.label, "7d")
+        XCTAssertEqual(snapshot.additional?.label, "30d")
+    }
+
+    func testCodexUsageSurfacePluginShowsUsageCloudSurfaces() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let snapshot = OpenPetsCodexUsageSnapshot(
+            planType: nil,
+            primary: OpenPetsCodexUsageBucket(
+                label: "5h",
+                usedPercentage: 42,
+                windowMinutes: 300,
+                resetDate: now.addingTimeInterval(90 * 60),
+                kind: "primary"
+            ),
+            secondary: OpenPetsCodexUsageBucket(
+                label: "7d",
+                usedPercentage: 76,
+                windowMinutes: 10_080,
+                resetDate: now.addingTimeInterval(3 * 24 * 60 * 60),
+                kind: "secondary"
+            ),
+            additional: nil,
+            observedAt: now,
+            source: "live"
+        )
+
+        let updates = OpenPetsCodexUsageSurfacePlugin.surfaceUpdates(for: snapshot, now: now)
+
+        XCTAssertEqual(updates.map(\.surfaceID), ["codex.primary", "codex.secondary"])
+        XCTAssertEqual(updates[0].slotPreference, [.hotspotTopLeading, .hotspotLeft])
+        XCTAssertEqual(updates[0].icon, OpenPetsSurfaceIcons.quota)
+        XCTAssertEqual(updates[0].value, "5h 42%")
+        XCTAssertEqual(updates[0].detail?.rows.map(\.label), ["Used", "Remaining", "Reset", "Source"])
+        XCTAssertEqual(updates[0].detail?.rows.first { $0.label == "Remaining" }?.value, "58%")
+        XCTAssertEqual(updates[0].detail?.rows.first { $0.label == "Reset" }?.value, "1h 30m")
+        XCTAssertEqual(updates[0].detail?.ttlSeconds, 12)
+        XCTAssertEqual(updates[1].slotPreference, [.hotspotBottomTrailing, .hotspotRight])
+        XCTAssertEqual(updates[1].value, "7d 76%")
+        XCTAssertEqual(updates[1].tone, .warning)
+    }
+
+    func testCodexUsageSurfacePluginShowsSetupCloudWhenConfiguredButMissingUsageData() {
+        let update = OpenPetsCodexUsageSurfacePlugin.setupSurfaceUpdate()
+
+        XCTAssertEqual(update.surfaceID, "codex.usage.setup")
+        XCTAssertEqual(update.icon, OpenPetsSurfaceIcons.info)
+        XCTAssertEqual(update.value, "Codex")
+        XCTAssertEqual(update.tone, .muted)
+        XCTAssertEqual(update.detail?.rows.map(\.label), ["Status", "Source"])
+    }
+
+    func testCodexUsageSurfacePluginEmitsCriticalReaction() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let snapshot = OpenPetsCodexUsageSnapshot(
+            planType: nil,
+            primary: OpenPetsCodexUsageBucket(
+                label: "5h",
+                usedPercentage: 92,
+                windowMinutes: 300,
+                resetDate: now.addingTimeInterval(20 * 60),
+                kind: "primary"
+            ),
+            secondary: OpenPetsCodexUsageBucket(
+                label: "7d",
+                usedPercentage: 20,
+                windowMinutes: 10_080,
+                resetDate: now.addingTimeInterval(6 * 24 * 60 * 60),
+                kind: "secondary"
+            ),
+            additional: nil,
+            observedAt: now,
+            source: "live"
+        )
+
+        XCTAssertEqual(OpenPetsCodexUsageSurfacePlugin.reactionUpdates(for: snapshot), [
+            OpenPetsPetReactionUpdate(
+                reactionID: "codex.usage-critical",
+                kind: .alert,
+                priority: 75,
                 ttlSeconds: 20
             )
         ])

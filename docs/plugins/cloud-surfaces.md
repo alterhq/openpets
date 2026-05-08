@@ -6,7 +6,7 @@ Plugins never provide absolute coordinates, custom UI, renderer templates, windo
 
 Plugin support is currently built-in and pull-request based. External plugin install, update, sandboxing, and per-plugin repository distribution are planned but not shipped yet.
 
-The first-party battery and Claude Code plugins are the canonical built-in examples. They stay in the OpenPets repository until the external plugin runtime and install contract are stable.
+The first-party battery, Claude Code, and Codex Usage plugins are the canonical built-in examples. They stay in the OpenPets repository until the external plugin runtime and install contract are stable.
 
 Built-in plugins can be enabled or disabled from the OpenPets menu bar app's Plugins submenu.
 
@@ -90,7 +90,7 @@ hotspot.left
 
 The cloud gradient is extracted from the currently selected pet sprite at startup and reused until the pet changes. Hidden hotspots appear as tiny color-matched glows. Nearby hotspots reveal the full cloud with white icon and value.
 
-Multi-metric plugins should emit one surface per metric. The built-in Claude Code plugin reads OpenPets' own quota cache written by `openpets claude-statusline` and emits separate `claude.5h` and `claude.7d` cloud surfaces, with reset times and pace in click details. If Claude Code is configured but no fresh quota cache exists, the plugin emits a muted setup cloud that links to setup docs.
+Multi-metric plugins should emit one surface per metric. The built-in Claude Code plugin reads OpenPets' own quota cache written by `openpets claude-statusline` and emits separate `claude.5h` and `claude.7d` cloud surfaces, with reset times and pace in click details. The built-in Codex Usage plugin reads `~/.codex/auth.json` for the ChatGPT Codex usage API, then emits separate Codex usage clouds for each available rate-limit window.
 
 Plugins can also emit separate `pet.reaction` updates with semantic states such as `low-energy`, `charging`, `alert`, `celebrate`, `working`, and `resting`. Pet reactions remain independent from cloud surfaces.
 
@@ -119,7 +119,7 @@ Before tagging OpenPetsKit:
 Before tagging OpenPets:
 
 - Replace the development `../openpetskit` package dependency with the published OpenPetsKit version.
-- Keep the battery and Claude Code plugins enabled as first-party built-in plugins.
+- Keep the battery, Claude Code, and Codex Usage plugins enabled as first-party built-in plugins.
 - Keep this document clear that plugin support is built-in/PR-based for now.
 - Suggested commit: `feat: add battery cloud surface plugin`.
 
@@ -127,4 +127,4 @@ After the initial release:
 
 - Add a stable `plugins/` or `Sources/OpenPetsPlugins/` convention if built-in plugin count grows.
 - Draft the external plugin RFC covering manifests, arbitrary commands, subprocess execution, seatbelt sandboxing, declared permissions, install, update, disable, and audit UX.
-- Use the Claude Code plugin to validate multiple metric clouds and click details.
+- Use the Claude Code and Codex Usage plugins to validate multiple metric clouds and click details.

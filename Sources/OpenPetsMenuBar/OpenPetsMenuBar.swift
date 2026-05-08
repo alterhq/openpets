@@ -77,7 +77,8 @@ private struct BuiltInSurfacePlugin {
 
     static let all: [BuiltInSurfacePlugin] = [
         BuiltInSurfacePlugin(id: "openpets.plugin.battery", name: "Battery"),
-        BuiltInSurfacePlugin(id: "openpets.plugin.claude-code", name: "Claude Code")
+        BuiltInSurfacePlugin(id: "openpets.plugin.claude-code", name: "Claude Code"),
+        BuiltInSurfacePlugin(id: "openpets.plugin.codex-usage", name: "Codex Usage")
     ]
 }
 
@@ -148,6 +149,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     private var agentOnboardingController: OpenPetsAgentOnboardingWindowController?
     private let batterySurfacePlugin = OpenPetsBatterySurfacePlugin()
     private let claudeCodeSurfacePlugin = OpenPetsClaudeCodeSurfacePlugin()
+    private let codexUsageSurfacePlugin = OpenPetsCodexUsageSurfacePlugin()
     private var surfaceUpdatesByPluginID: [String: [OpenPetsSurfaceUpdate]] = [:]
     private var petReactionUpdatesByPluginID: [String: [OpenPetsPetReactionUpdate]] = [:]
 
@@ -301,11 +303,17 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         } else {
             stopClaudeCodeSurfacePlugin()
         }
+        if configuration.isPluginEnabled(OpenPetsCodexUsageSurfacePlugin.pluginID) {
+            startCodexUsageSurfacePlugin()
+        } else {
+            stopCodexUsageSurfacePlugin()
+        }
     }
 
     func stopSurfacePlugins() {
         batterySurfacePlugin.stop()
         claudeCodeSurfacePlugin.stop()
+        codexUsageSurfacePlugin.stop()
         surfaceUpdatesByPluginID.removeAll()
         petReactionUpdatesByPluginID.removeAll()
         petSession?.clearSurfaceUpdates()
@@ -336,6 +344,19 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         claudeCodeSurfacePlugin.stop()
         setSurfaceUpdates([], forPluginID: OpenPetsClaudeCodeSurfacePlugin.pluginID)
         setPetReactionUpdates([], forPluginID: OpenPetsClaudeCodeSurfacePlugin.pluginID)
+    }
+
+    private func startCodexUsageSurfacePlugin() {
+        codexUsageSurfacePlugin.start { [weak self] surfaceUpdates, reactionUpdates in
+            self?.setSurfaceUpdates(surfaceUpdates, forPluginID: OpenPetsCodexUsageSurfacePlugin.pluginID)
+            self?.setPetReactionUpdates(reactionUpdates, forPluginID: OpenPetsCodexUsageSurfacePlugin.pluginID)
+        }
+    }
+
+    private func stopCodexUsageSurfacePlugin() {
+        codexUsageSurfacePlugin.stop()
+        setSurfaceUpdates([], forPluginID: OpenPetsCodexUsageSurfacePlugin.pluginID)
+        setPetReactionUpdates([], forPluginID: OpenPetsCodexUsageSurfacePlugin.pluginID)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -993,6 +1014,12 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 startClaudeCodeSurfacePlugin()
             } else {
                 stopClaudeCodeSurfacePlugin()
+            }
+        case OpenPetsCodexUsageSurfacePlugin.pluginID:
+            if configuration.isPluginEnabled(pluginID) {
+                startCodexUsageSurfacePlugin()
+            } else {
+                stopCodexUsageSurfacePlugin()
             }
         default:
             break

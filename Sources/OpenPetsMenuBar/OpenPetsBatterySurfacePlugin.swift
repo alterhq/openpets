@@ -142,15 +142,6 @@ final class OpenPetsBatterySurfacePlugin {
                 )
             ]
         }
-        if snapshot.isCharging {
-            return [
-                OpenPetsPetReactionUpdate(
-                    reactionID: "battery.charging",
-                    kind: .charging,
-                    priority: 20
-                )
-            ]
-        }
         return []
     }
 
