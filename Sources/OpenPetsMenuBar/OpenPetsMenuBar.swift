@@ -71,6 +71,16 @@ private final class OpenPetsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
     }
 }
 
+private struct BuiltInSurfacePlugin {
+    var id: String
+    var name: String
+
+    static let all: [BuiltInSurfacePlugin] = [
+        BuiltInSurfacePlugin(id: "openpets.plugin.battery", name: "Battery"),
+        BuiltInSurfacePlugin(id: "openpets.plugin.claude-code", name: "Claude Code")
+    ]
+}
+
 @MainActor
 final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     private enum MCPState: Equatable {
@@ -137,6 +147,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     private var activeInstallRequestID: UUID?
     private var agentOnboardingController: OpenPetsAgentOnboardingWindowController?
     private let batterySurfacePlugin = OpenPetsBatterySurfacePlugin()
+    private let claudeCodeSurfacePlugin = OpenPetsClaudeCodeSurfacePlugin()
     private var surfaceUpdatesByPluginID: [String: [OpenPetsSurfaceUpdate]] = [:]
     private var petReactionUpdatesByPluginID: [String: [OpenPetsPetReactionUpdate]] = [:]
 
@@ -173,6 +184,11 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     private lazy var installPetsItem = NSMenuItem(
         title: "Install pets...",
         action: #selector(openPetsGallery),
+        keyEquivalent: ""
+    )
+    private lazy var pluginsItem = NSMenuItem(
+        title: "Plugins",
+        action: nil,
         keyEquivalent: ""
     )
     #if DEBUG
@@ -221,6 +237,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         var callPetItem: NSMenuItem
         var activePetItem: NSMenuItem
         var installPetsItem: NSMenuItem
+        var pluginsItem: NSMenuItem
         var installFromLinkItem: NSMenuItem?
         var openConfigItem: NSMenuItem
         var installCommandLineToolItem: NSMenuItem
@@ -237,6 +254,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 wakeStopPetItem,
                 callPetItem,
                 installPetsItem,
+                pluginsItem,
                 openConfigItem,
                 installCommandLineToolItem,
                 setUpAgentsItem,
@@ -272,18 +290,52 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     }
 
     func startSurfacePlugins() {
+        reloadConfiguration()
+        if configuration.isPluginEnabled(OpenPetsBatterySurfacePlugin.pluginID) {
+            startBatterySurfacePlugin()
+        } else {
+            stopBatterySurfacePlugin()
+        }
+        if configuration.isPluginEnabled(OpenPetsClaudeCodeSurfacePlugin.pluginID) {
+            startClaudeCodeSurfacePlugin()
+        } else {
+            stopClaudeCodeSurfacePlugin()
+        }
+    }
+
+    func stopSurfacePlugins() {
+        batterySurfacePlugin.stop()
+        claudeCodeSurfacePlugin.stop()
+        surfaceUpdatesByPluginID.removeAll()
+        petReactionUpdatesByPluginID.removeAll()
+        petSession?.clearSurfaceUpdates()
+        petSession?.clearPetReactionUpdates()
+    }
+
+    private func startBatterySurfacePlugin() {
         batterySurfacePlugin.start { [weak self] surfaceUpdates, reactionUpdates in
             self?.setSurfaceUpdates(surfaceUpdates, forPluginID: OpenPetsBatterySurfacePlugin.pluginID)
             self?.setPetReactionUpdates(reactionUpdates, forPluginID: OpenPetsBatterySurfacePlugin.pluginID)
         }
     }
 
-    func stopSurfacePlugins() {
+    private func stopBatterySurfacePlugin() {
         batterySurfacePlugin.stop()
-        surfaceUpdatesByPluginID.removeAll()
-        petReactionUpdatesByPluginID.removeAll()
-        petSession?.clearSurfaceUpdates()
-        petSession?.clearPetReactionUpdates()
+        setSurfaceUpdates([], forPluginID: OpenPetsBatterySurfacePlugin.pluginID)
+        setPetReactionUpdates([], forPluginID: OpenPetsBatterySurfacePlugin.pluginID)
+    }
+
+    private func startClaudeCodeSurfacePlugin() {
+        claudeCodeSurfacePlugin.start { [weak self] surfaceUpdates, reactionUpdates in
+            self?.setSurfaceUpdates(surfaceUpdates, forPluginID: OpenPetsClaudeCodeSurfacePlugin.pluginID)
+            self?.setPetReactionUpdates(reactionUpdates, forPluginID: OpenPetsClaudeCodeSurfacePlugin.pluginID)
+        }
+    }
+
+    private func stopClaudeCodeSurfacePlugin() {
+        claudeCodeSurfacePlugin.stop()
+        setSurfaceUpdates([], forPluginID: OpenPetsClaudeCodeSurfacePlugin.pluginID)
+        setPetReactionUpdates([], forPluginID: OpenPetsClaudeCodeSurfacePlugin.pluginID)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -316,6 +368,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             callPetItem: callPetItem,
             activePetItem: activePetItem,
             installPetsItem: installPetsItem,
+            pluginsItem: pluginsItem,
             installFromLinkItem: installFromLinkItem,
             openConfigItem: openConfigItem,
             installCommandLineToolItem: installCommandLineToolItem,
@@ -373,6 +426,11 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 action: #selector(openPetsGallery),
                 keyEquivalent: ""
             ),
+            pluginsItem: NSMenuItem(
+                title: "Plugins",
+                action: nil,
+                keyEquivalent: ""
+            ),
             installFromLinkItem: installFromLinkItem,
             openConfigItem: NSMenuItem(
                 title: "Open Config Folder",
@@ -421,6 +479,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(items.callPetItem)
         menu.addItem(items.activePetItem)
         menu.addItem(items.installPetsItem)
+        menu.addItem(items.pluginsItem)
         if let installFromLinkItem = items.installFromLinkItem {
             menu.addItem(installFromLinkItem)
         }
@@ -495,6 +554,23 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+
+    @objc private func togglePlugin(_ sender: NSMenuItem) {
+        guard let pluginID = sender.representedObject as? String else {
+            return
+        }
+
+        do {
+            var updatedConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
+            updatedConfiguration.setPlugin(pluginID, enabled: !updatedConfiguration.isPluginEnabled(pluginID))
+            try updatedConfiguration.save()
+            configuration = updatedConfiguration
+            applyPluginEnabledState(pluginID)
+            refreshMenu()
+        } catch {
+            showError("Could not update plugin", detail: error.localizedDescription)
+        }
     }
 
     @objc private func installCommandLineTool() {
@@ -904,6 +980,25 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         petSession.setPetReactionUpdates(updates)
     }
 
+    private func applyPluginEnabledState(_ pluginID: String) {
+        switch pluginID {
+        case OpenPetsBatterySurfacePlugin.pluginID:
+            if configuration.isPluginEnabled(pluginID) {
+                startBatterySurfacePlugin()
+            } else {
+                stopBatterySurfacePlugin()
+            }
+        case OpenPetsClaudeCodeSurfacePlugin.pluginID:
+            if configuration.isPluginEnabled(pluginID) {
+                startClaudeCodeSurfacePlugin()
+            } else {
+                stopClaudeCodeSurfacePlugin()
+            }
+        default:
+            break
+        }
+    }
+
     private func refreshMenu() {
         refreshMenuItems(statusMenuItems())
     }
@@ -913,6 +1008,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         items.serverStatusItem.title = "Server Status: \(mcpState.label)"
         items.wakeStopPetItem.title = petSession?.isRunning == true ? "Stop Pet" : "Wake Pet"
         refreshPetMenu(items.activePetItem)
+        refreshPluginsMenu(items.pluginsItem)
     }
 
     private func refreshPetMenu(_ activePetItem: NSMenuItem) {
@@ -927,6 +1023,19 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         }
         activePetItem.submenu = menu
         activePetItem.title = "Active Pet: \(pets.first { $0.id == configuration.activePetID }?.displayName ?? "Starcorn")"
+    }
+
+    private func refreshPluginsMenu(_ pluginsItem: NSMenuItem) {
+        let menu = NSMenu()
+        for plugin in BuiltInSurfacePlugin.all {
+            let item = NSMenuItem(title: plugin.name, action: #selector(togglePlugin(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = plugin.id
+            item.state = configuration.isPluginEnabled(plugin.id) ? .on : .off
+            menu.addItem(item)
+        }
+        pluginsItem.submenu = menu
+        pluginsItem.title = "Plugins"
     }
 
     private func showStartupPetGreeting() {
@@ -1025,6 +1134,19 @@ private enum OpenPetsMenuBarError: Error, LocalizedError {
 }
 
 private extension OpenPetsConfiguration {
+    func isPluginEnabled(_ pluginID: String) -> Bool {
+        !disabledPluginIDs.contains(pluginID)
+    }
+
+    mutating func setPlugin(_ pluginID: String, enabled: Bool) {
+        if enabled {
+            disabledPluginIDs.removeAll { $0 == pluginID }
+        } else if !disabledPluginIDs.contains(pluginID) {
+            disabledPluginIDs.append(pluginID)
+            disabledPluginIDs.sort()
+        }
+    }
+
     var normalizedMCPEndpoint: String {
         mcpEndpoint.hasPrefix("/") ? mcpEndpoint : "/\(mcpEndpoint)"
     }

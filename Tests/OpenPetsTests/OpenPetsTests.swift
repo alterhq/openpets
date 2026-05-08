@@ -69,11 +69,29 @@ final class OpenPetsTests: XCTestCase {
         let titles = menuItemTitles(menu)
 
         XCTAssertTrue(titles.contains("Install pets..."))
+        XCTAssertTrue(titles.contains("Plugins"))
         XCTAssertTrue(titles.contains("Install CLI"))
         XCTAssertFalse(titles.contains("Install Command Line Tool"))
 
         let versionItem = try XCTUnwrap(menu.items.first { $0.title.hasPrefix("Version ") })
         XCTAssertFalse(versionItem.isEnabled)
+    }
+
+    @MainActor
+    func testMenuIncludesPluginToggleSubmenu() throws {
+        let controller = OpenPetsMenuBarController()
+        let menu = controller.makeStatusItemMenu()
+
+        let pluginsItem = try XCTUnwrap(menu.items.first { $0.title == "Plugins" })
+        let submenu = try XCTUnwrap(pluginsItem.submenu)
+
+        XCTAssertEqual(submenu.items.map(\.title), ["Battery", "Claude Code"])
+        XCTAssertTrue(submenu.items.allSatisfy { $0.action != nil })
+        XCTAssertEqual(submenu.items.first { $0.title == "Battery" }?.representedObject as? String, OpenPetsBatterySurfacePlugin.pluginID)
+        XCTAssertEqual(
+            submenu.items.first { $0.title == "Claude Code" }?.representedObject as? String,
+            OpenPetsClaudeCodeSurfacePlugin.pluginID
+        )
     }
 
     @MainActor
@@ -302,6 +320,173 @@ final class OpenPetsTests: XCTestCase {
             isPresent: false,
             timeRemainingMinutes: nil
         )).isEmpty)
+    }
+
+    func testClaudeCodeQuotaCacheParsesStatusLinePayload() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let resetFiveHour = Int(now.addingTimeInterval(90 * 60).timeIntervalSince1970)
+        let resetSevenDay = Int(now.addingTimeInterval(3 * 24 * 60 * 60).timeIntervalSince1970)
+        let data = Data(
+            """
+            {
+              "rate_limits": {
+                "five_hour": {
+                  "used_percentage": 42,
+                  "resets_at": \(resetFiveHour)
+                },
+                "seven_day": {
+                  "used_percentage": 18,
+                  "resets_at": \(resetSevenDay)
+                }
+              }
+            }
+            """.utf8
+        )
+
+        let snapshot = try XCTUnwrap(OpenPetsClaudeCodeQuotaCache.snapshot(fromStatusLineJSON: data))
+
+        XCTAssertEqual(snapshot.fiveHour.usedPercentage, 42)
+        XCTAssertEqual(snapshot.fiveHour.durationMinutes, 300)
+        XCTAssertEqual(snapshot.sevenDay.usedPercentage, 18)
+        XCTAssertEqual(snapshot.sevenDay.durationMinutes, 10_080)
+    }
+
+    func testClaudeCodeQuotaReaderLoadsOpenPetsQuotaCache() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cacheURL = directory.appendingPathComponent("claude-code-quota.json")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let expected = OpenPetsClaudeCodeQuotaSnapshot(
+            fiveHour: OpenPetsClaudeCodeQuotaWindow(
+                label: "5h",
+                usedPercentage: 42,
+                resetDate: now.addingTimeInterval(90 * 60),
+                durationMinutes: 300
+            ),
+            sevenDay: OpenPetsClaudeCodeQuotaWindow(
+                label: "7d",
+                usedPercentage: 18,
+                resetDate: now.addingTimeInterval(3 * 24 * 60 * 60),
+                durationMinutes: 10_080
+            )
+        )
+        try OpenPetsClaudeCodeQuotaCache.save(expected, to: cacheURL)
+
+        let snapshot = try XCTUnwrap(OpenPetsClaudeCodeQuotaReader(cacheFileURL: cacheURL).snapshot(now: now))
+
+        XCTAssertEqual(snapshot.fiveHour.usedPercentage, 42)
+        XCTAssertEqual(snapshot.fiveHour.durationMinutes, 300)
+        XCTAssertEqual(snapshot.sevenDay.usedPercentage, 18)
+        XCTAssertEqual(snapshot.sevenDay.durationMinutes, 10_080)
+    }
+
+    func testClaudeCodeQuotaReaderRejectsExpiredQuotaCache() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cacheURL = directory.appendingPathComponent("claude-code-quota.json")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let snapshot = OpenPetsClaudeCodeQuotaSnapshot(
+            fiveHour: OpenPetsClaudeCodeQuotaWindow(
+                label: "5h",
+                usedPercentage: 42,
+                resetDate: now.addingTimeInterval(-60),
+                durationMinutes: 300
+            ),
+            sevenDay: OpenPetsClaudeCodeQuotaWindow(
+                label: "7d",
+                usedPercentage: 18,
+                resetDate: now.addingTimeInterval(3 * 24 * 60 * 60),
+                durationMinutes: 10_080
+            )
+        )
+        try OpenPetsClaudeCodeQuotaCache.save(snapshot, to: cacheURL)
+
+        XCTAssertNil(OpenPetsClaudeCodeQuotaReader(cacheFileURL: cacheURL).snapshot(now: now))
+    }
+
+    func testClaudeCodeQuotaReaderDetectsClaudeConfiguration() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let claudeDirectory = directory.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDirectory, withIntermediateDirectories: true)
+
+        XCTAssertTrue(OpenPetsClaudeCodeQuotaReader(
+            cacheFileURL: nil,
+            claudeConfigurationURLs: [claudeDirectory]
+        ).hasClaudeConfiguration())
+    }
+
+    func testClaudeCodeSurfacePluginShowsTwoQuotaCloudSurfaces() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let snapshot = OpenPetsClaudeCodeQuotaSnapshot(
+            fiveHour: OpenPetsClaudeCodeQuotaWindow(
+                label: "5h",
+                usedPercentage: 42,
+                resetDate: now.addingTimeInterval(90 * 60),
+                durationMinutes: 300
+            ),
+            sevenDay: OpenPetsClaudeCodeQuotaWindow(
+                label: "7d",
+                usedPercentage: 76,
+                resetDate: now.addingTimeInterval(3 * 24 * 60 * 60),
+                durationMinutes: 10_080
+            )
+        )
+
+        let updates = OpenPetsClaudeCodeSurfacePlugin.surfaceUpdates(for: snapshot, now: now)
+
+        XCTAssertEqual(updates.map(\.surfaceID), ["claude.5h", "claude.7d"])
+        XCTAssertEqual(updates[0].slotPreference, [.hotspotTopLeading, .hotspotLeft])
+        XCTAssertEqual(updates[0].icon, OpenPetsSurfaceIcons.quota)
+        XCTAssertEqual(updates[0].value, "5h 42%")
+        XCTAssertEqual(updates[0].detail?.rows.map(\.label), ["Used", "Reset", "Pace"])
+        XCTAssertEqual(updates[0].detail?.rows.first { $0.label == "Reset" }?.value, "1h 30m")
+        XCTAssertEqual(updates[0].detail?.rows.first { $0.label == "Pace" }?.value, "Headroom 28%")
+        XCTAssertEqual(updates[0].detail?.ttlSeconds, 12)
+        XCTAssertEqual(updates[1].slotPreference, [.hotspotBottomLeading, .hotspotLeft])
+        XCTAssertEqual(updates[1].value, "7d 76%")
+        XCTAssertEqual(updates[1].tone, .warning)
+    }
+
+    func testClaudeCodeSurfacePluginShowsSetupCloudWhenConfiguredButMissingQuotaData() {
+        let update = OpenPetsClaudeCodeSurfacePlugin.setupSurfaceUpdate()
+
+        XCTAssertEqual(update.surfaceID, "claude.setup")
+        XCTAssertEqual(update.icon, OpenPetsSurfaceIcons.info)
+        XCTAssertEqual(update.value, "Claude")
+        XCTAssertEqual(update.tone, .muted)
+        XCTAssertEqual(update.detail?.rows.map(\.label), ["Status", "Setup"])
+        XCTAssertEqual(
+            update.detail?.rows.first { $0.label == "Setup" }?.value,
+            "Use openpets claude-statusline"
+        )
+    }
+
+    func testClaudeCodeSurfacePluginEmitsCriticalReaction() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let snapshot = OpenPetsClaudeCodeQuotaSnapshot(
+            fiveHour: OpenPetsClaudeCodeQuotaWindow(
+                label: "5h",
+                usedPercentage: 92,
+                resetDate: now.addingTimeInterval(20 * 60),
+                durationMinutes: 300
+            ),
+            sevenDay: OpenPetsClaudeCodeQuotaWindow(
+                label: "7d",
+                usedPercentage: 20,
+                resetDate: now.addingTimeInterval(6 * 24 * 60 * 60),
+                durationMinutes: 10_080
+            )
+        )
+
+        XCTAssertEqual(OpenPetsClaudeCodeSurfacePlugin.reactionUpdates(for: snapshot, now: now), [
+            OpenPetsPetReactionUpdate(
+                reactionID: "claude.quota-critical",
+                kind: .alert,
+                priority: 80,
+                ttlSeconds: 20
+            )
+        ])
     }
 
     func testCommandLineToolInstallerCreatesUserShim() throws {
