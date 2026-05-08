@@ -183,6 +183,11 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         action: nil,
         keyEquivalent: ""
     )
+    private lazy var scaleItem = NSMenuItem(
+        title: "Scale",
+        action: nil,
+        keyEquivalent: ""
+    )
     private lazy var installPetsItem = NSMenuItem(
         title: "Install pets...",
         action: #selector(openPetsGallery),
@@ -238,6 +243,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         var wakeStopPetItem: NSMenuItem
         var callPetItem: NSMenuItem
         var activePetItem: NSMenuItem
+        var scaleItem: NSMenuItem
         var installPetsItem: NSMenuItem
         var pluginsItem: NSMenuItem
         var installFromLinkItem: NSMenuItem?
@@ -255,6 +261,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 copyServerURLItem,
                 wakeStopPetItem,
                 callPetItem,
+                scaleItem,
                 installPetsItem,
                 pluginsItem,
                 openConfigItem,
@@ -388,6 +395,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             wakeStopPetItem: wakeStopPetItem,
             callPetItem: callPetItem,
             activePetItem: activePetItem,
+            scaleItem: scaleItem,
             installPetsItem: installPetsItem,
             pluginsItem: pluginsItem,
             installFromLinkItem: installFromLinkItem,
@@ -439,6 +447,11 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             ),
             activePetItem: NSMenuItem(
                 title: "Active Pet",
+                action: nil,
+                keyEquivalent: ""
+            ),
+            scaleItem: NSMenuItem(
+                title: "Scale",
                 action: nil,
                 keyEquivalent: ""
             ),
@@ -499,6 +512,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(items.wakeStopPetItem)
         menu.addItem(items.callPetItem)
         menu.addItem(items.activePetItem)
+        menu.addItem(items.scaleItem)
         menu.addItem(items.installPetsItem)
         menu.addItem(items.pluginsItem)
         if let installFromLinkItem = items.installFromLinkItem {
@@ -639,6 +653,27 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             refreshMenu()
         } catch {
             showError("Could not switch pet", detail: error.localizedDescription)
+        }
+    }
+
+    @objc private func selectScale(_ sender: NSMenuItem) {
+        guard let number = sender.representedObject as? NSNumber else {
+            return
+        }
+
+        do {
+            var updatedConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
+            updatedConfiguration.setScale(CGFloat(number.doubleValue), forPetID: updatedConfiguration.activePetID)
+            try updatedConfiguration.save()
+            configuration = updatedConfiguration
+            let shouldRestart = petSession?.isRunning == true
+            if shouldRestart {
+                stopPet()
+                try wakePet()
+            }
+            refreshMenu()
+        } catch {
+            showError("Could not update pet scale", detail: error.localizedDescription)
         }
     }
 
@@ -896,7 +931,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         let hostConfiguration = OpenPetsHostConfiguration(
             petDirectoryURL: petDirectoryURL,
             socketPath: configuration.socketPath,
-            display: configuration.display
+            display: configuration.display(forPetID: configuration.activePetID)
         )
         let session = OpenPetsHostSession(configuration: hostConfiguration, contextMenuProvider: { [weak self] in
             self?.makePetContextMenu()
@@ -1035,6 +1070,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         items.serverStatusItem.title = "Server Status: \(mcpState.label)"
         items.wakeStopPetItem.title = petSession?.isRunning == true ? "Stop Pet" : "Wake Pet"
         refreshPetMenu(items.activePetItem)
+        refreshScaleMenu(items.scaleItem)
         refreshPluginsMenu(items.pluginsItem)
     }
 
@@ -1050,6 +1086,20 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         }
         activePetItem.submenu = menu
         activePetItem.title = "Active Pet: \(pets.first { $0.id == configuration.activePetID }?.displayName ?? "Starcorn")"
+    }
+
+    private func refreshScaleMenu(_ scaleItem: NSMenuItem) {
+        let menu = NSMenu()
+        let currentScale = configuration.scale(forPetID: configuration.activePetID)
+        for scale in Self.petScaleOptions {
+            let item = NSMenuItem(title: scaleMenuTitle(for: scale), action: #selector(selectScale(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = NSNumber(value: Double(scale))
+            item.state = scalesMatch(scale, currentScale) ? .on : .off
+            menu.addItem(item)
+        }
+        scaleItem.submenu = menu
+        scaleItem.title = "Scale: \(scaleMenuTitle(for: currentScale))"
     }
 
     private func refreshPluginsMenu(_ pluginsItem: NSMenuItem) {
@@ -1146,6 +1196,39 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         alert.informativeText = detail
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    private static let petScaleOptions: [CGFloat] = [
+        0.42,
+        0.57,
+        0.72,
+        0.87,
+        1.02,
+        1.17,
+        1.32,
+        1.47,
+        1.62,
+        1.77,
+        1.92
+    ]
+
+    private func scaleMenuTitle(for scale: CGFloat) -> String {
+        let value = Double(scale)
+        let roundedInteger = value.rounded()
+        if abs(value - roundedInteger) < 0.001 {
+            return "\(Int(roundedInteger))x"
+        }
+
+        let roundedTenth = (value * 10).rounded() / 10
+        if abs(value - roundedTenth) < 0.001 {
+            return String(format: "%.1fx", value)
+        }
+
+        return String(format: "%.2fx", value)
+    }
+
+    private func scalesMatch(_ lhs: CGFloat, _ rhs: CGFloat) -> Bool {
+        abs(Double(lhs - rhs)) < 0.001
     }
 }
 

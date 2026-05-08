@@ -99,6 +99,49 @@ final class OpenPetsTests: XCTestCase {
     }
 
     @MainActor
+    func testMenuIncludesScaleSubmenu() throws {
+        let controller = OpenPetsMenuBarController()
+        let menu = controller.makeStatusItemMenu()
+
+        let scaleItem = try XCTUnwrap(menu.items.first { $0.title.hasPrefix("Scale:") })
+        let submenu = try XCTUnwrap(scaleItem.submenu)
+
+        XCTAssertEqual(
+            submenu.items.map(\.title),
+            ["0.42x", "0.57x", "0.72x", "0.87x", "1.02x", "1.17x", "1.32x", "1.47x", "1.62x", "1.77x", "1.92x"]
+        )
+        XCTAssertEqual(
+            submenu.items.compactMap { ($0.representedObject as? NSNumber)?.doubleValue },
+            [0.42, 0.57, 0.72, 0.87, 1.02, 1.17, 1.32, 1.47, 1.62, 1.77, 1.92]
+        )
+        XCTAssertTrue(submenu.items.allSatisfy { $0.action != nil })
+    }
+
+    @MainActor
+    func testSelectingScaleSavesScaleForActivePet() throws {
+        try withTemporaryXDGConfigHome {
+            try OpenPetsConfiguration(
+                display: OpenPetsDisplayConfiguration(scale: 0.75),
+                activePetID: "active-pet",
+                petScalesByID: ["other-pet": 1.25]
+            ).save()
+
+            let controller = OpenPetsMenuBarController()
+            let menu = controller.makeStatusItemMenu()
+            let scaleItem = try XCTUnwrap(menu.items.first { $0.title == "Scale: 0.75x" })
+            let option = try XCTUnwrap(scaleItem.submenu?.items.first { $0.title == "1.47x" })
+            let action = try XCTUnwrap(option.action)
+
+            XCTAssertTrue(NSApplication.shared.sendAction(action, to: option.target, from: option))
+
+            let reloaded = try OpenPetsConfiguration.load()
+            XCTAssertEqual(reloaded.petScalesByID["active-pet"], 1.47)
+            XCTAssertEqual(reloaded.petScalesByID["other-pet"], 1.25)
+            XCTAssertEqual(reloaded.display.scale, 0.75)
+        }
+    }
+
+    @MainActor
     func testMCPToolDescriptionsGuideAgentUsage() throws {
         let tools = openPetsTools()
         let descriptions = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0.description ?? "") })
@@ -1592,6 +1635,22 @@ final class OpenPetsTests: XCTestCase {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
+
+    private func withTemporaryXDGConfigHome<T>(_ body: () throws -> T) throws -> T {
+        let originalValue = getenv("XDG_CONFIG_HOME").map { String(cString: $0) }
+        let directory = try makeTemporaryDirectory()
+        setenv("XDG_CONFIG_HOME", directory.path, 1)
+        defer {
+            if let originalValue {
+                setenv("XDG_CONFIG_HOME", originalValue, 1)
+            } else {
+                unsetenv("XDG_CONFIG_HOME")
+            }
+            try? FileManager.default.removeItem(at: directory)
+        }
+        return try body()
+    }
+
     private func runProcess(_ executable: String, arguments: [String], workingDirectory: URL? = nil) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
