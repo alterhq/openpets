@@ -37,6 +37,7 @@ private final class OpenPetsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
         let shouldShowOnboarding = controller.prepareFirstLaunch()
         controller.installMenu()
         controller.startMCPServer()
+        controller.startSurfacePlugins()
         if shouldShowOnboarding {
             controller.showAgentOnboarding()
         }
@@ -54,6 +55,7 @@ private final class OpenPetsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
             andEventID: AEEventID(kAEGetURL)
         )
         controller.cleanupInstallPreview()
+        controller.stopSurfacePlugins()
         controller.stopPet()
         controller.stopMCPServer()
     }
@@ -134,6 +136,9 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     private var pendingPreparedInstall: OpenPetsPreparedInstall?
     private var activeInstallRequestID: UUID?
     private var agentOnboardingController: OpenPetsAgentOnboardingWindowController?
+    private let batterySurfacePlugin = OpenPetsBatterySurfacePlugin()
+    private var surfaceUpdatesByPluginID: [String: [OpenPetsSurfaceUpdate]] = [:]
+    private var petReactionUpdatesByPluginID: [String: [OpenPetsPetReactionUpdate]] = [:]
 
     private lazy var startStopServerItem = NSMenuItem(
         title: "Start MCP Server",
@@ -264,6 +269,21 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         let menu = makeStatusItemMenu()
         menu.delegate = self
         statusItem.menu = menu
+    }
+
+    func startSurfacePlugins() {
+        batterySurfacePlugin.start { [weak self] surfaceUpdates, reactionUpdates in
+            self?.setSurfaceUpdates(surfaceUpdates, forPluginID: OpenPetsBatterySurfacePlugin.pluginID)
+            self?.setPetReactionUpdates(reactionUpdates, forPluginID: OpenPetsBatterySurfacePlugin.pluginID)
+        }
+    }
+
+    func stopSurfacePlugins() {
+        batterySurfacePlugin.stop()
+        surfaceUpdatesByPluginID.removeAll()
+        petReactionUpdatesByPluginID.removeAll()
+        petSession?.clearSurfaceUpdates()
+        petSession?.clearPetReactionUpdates()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -786,10 +806,13 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         })
         try session.start()
         petSession = session
+        applySurfaceUpdatesToPet()
+        batterySurfacePlugin.refresh()
         refreshMenu()
     }
 
     func stopPet() {
+        petSession?.clearSurfaceUpdates()
         petSession?.stop()
         petSession = nil
         refreshMenu()
@@ -853,6 +876,32 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
 
     private func reloadConfiguration() {
         configuration = (try? OpenPetsConfiguration.load()) ?? OpenPetsConfiguration()
+    }
+
+    private func setSurfaceUpdates(_ updates: [OpenPetsSurfaceUpdate], forPluginID pluginID: String) {
+        surfaceUpdatesByPluginID[pluginID] = updates
+        applySurfaceUpdatesToPet()
+    }
+
+    private func setPetReactionUpdates(_ updates: [OpenPetsPetReactionUpdate], forPluginID pluginID: String) {
+        petReactionUpdatesByPluginID[pluginID] = updates
+        applyPetReactionUpdatesToPet()
+    }
+
+    private func applySurfaceUpdatesToPet() {
+        guard let petSession, petSession.isRunning else { return }
+        let updates = surfaceUpdatesByPluginID.keys
+            .sorted()
+            .flatMap { surfaceUpdatesByPluginID[$0] ?? [] }
+        _ = petSession.setSurfaceUpdates(updates)
+    }
+
+    private func applyPetReactionUpdatesToPet() {
+        guard let petSession, petSession.isRunning else { return }
+        let updates = petReactionUpdatesByPluginID.keys
+            .sorted()
+            .flatMap { petReactionUpdatesByPluginID[$0] ?? [] }
+        petSession.setPetReactionUpdates(updates)
     }
 
     private func refreshMenu() {

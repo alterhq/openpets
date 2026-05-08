@@ -34,6 +34,7 @@ Add the recommended assistant instructions so the assistant uses the desktop pet
 - Let multiple local tools share one pet instead of each app owning a separate status UI.
 - Send notifications and animations from an MCP client, a Swift app, or CLI scripts.
 - Run the bundled Starcorn pet or install custom Codex Pets using an 8x9 sprite atlas.
+- Define plugin surfaces through host-owned pet-matched cloud hotspots.
 - Use action URLs on notifications for lightweight follow-up flows.
 
 ## Roadmap
@@ -205,6 +206,14 @@ OpenPets also discovers valid pet bundles from these user locations:
 ```
 
 If `XDG_DATA_HOME` is set, OpenPets checks `$XDG_DATA_HOME/openpets/pets/` instead of `~/.local/share/openpets/pets/`.
+
+## Plugin Surfaces
+
+OpenPets includes a V1 cloud-surface contract for plugins. Plugins provide semantic icon/value data plus optional detail rows; OpenPets resolves placement into host-owned hotspot slots and renders pet-matched gradient cloud hotspots. Plugins do not choose absolute screen positions or custom renderers.
+
+Plugin support is currently built-in and pull-request based. External plugin install, separate plugin repositories, sandboxed subprocess execution, and plugin update UX are planned but not shipped yet. The built-in battery plugin is the first-party reference implementation.
+
+See [Plugin Cloud Surfaces](./docs/plugins/cloud-surfaces.md) for update payloads and placement rules.
 
 ## Codex Pets
 

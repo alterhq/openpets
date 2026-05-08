@@ -93,6 +93,20 @@ Pet bundles must include a `pet.json` manifest and a spritesheet with an 8x9 atl
 
 If you add or modify bundled assets, include provenance and licensing details in the pull request.
 
+## Built-In Plugins
+
+OpenPets plugin support is currently built-in and pull-request based. Do not create a separate plugin repository for new plugins until OpenPets ships an external plugin installer, runtime manifest, sandbox/permissions policy, and update UX.
+
+Built-in plugin pull requests must:
+
+- Emit semantic `surface.update` data and optional `pet.reaction` data only.
+- Use host-owned cloud hotspots; do not add plugin-owned windows, web views, custom renderers, or absolute positioning.
+- Keep long-running work off the main actor.
+- Include tests for emitted surfaces, reactions, and missing-data behavior.
+- Document user-facing behavior and any sensitive system, file, network, or API access.
+
+The first-party battery plugin is the canonical reference for the current built-in plugin model.
+
 ## Security
 
 OpenPets can expose an MCP server and open callback URLs from notification actions. Treat network binding, URL handling, and local IPC changes as security-sensitive.

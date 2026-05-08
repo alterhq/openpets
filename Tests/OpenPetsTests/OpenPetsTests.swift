@@ -206,6 +206,90 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertTrue(required.isEmpty)
     }
 
+    func testBatterySurfacePluginShowsCloudSurfaceForNormalBattery() {
+        let updates = OpenPetsBatterySurfacePlugin.surfaceUpdates(for: OpenPetsBatterySnapshot(
+            percent: 68,
+            isCharging: false,
+            isPresent: true,
+            timeRemainingMinutes: 185
+        ))
+
+        XCTAssertEqual(updates.map(\.surfaceID), ["battery.badge"])
+        XCTAssertEqual(updates.first?.slotPreference, [.hotspotTopTrailing, .hotspotRight])
+        XCTAssertEqual(updates.first?.icon, OpenPetsSurfaceIcons.battery75)
+        XCTAssertEqual(updates.first?.value, "68%")
+        XCTAssertEqual(updates.first?.label, "Battery")
+        XCTAssertEqual(updates.first?.tone, .normal)
+        XCTAssertEqual(updates.first?.detail?.title, "Battery")
+        XCTAssertEqual(updates.first?.detail?.rows.map(\.label), ["Charge", "State", "Remaining"])
+    }
+
+    func testBatterySurfacePluginKeepsLowBatteryAsCriticalCloudSurface() {
+        let updates = OpenPetsBatterySurfacePlugin.surfaceUpdates(for: OpenPetsBatterySnapshot(
+            percent: 9,
+            isCharging: false,
+            isPresent: true,
+            timeRemainingMinutes: 22
+        ))
+
+        XCTAssertEqual(updates.map(\.surfaceID), ["battery.badge"])
+        let badge = try! XCTUnwrap(updates.first)
+        XCTAssertEqual(badge.priority, 90)
+        XCTAssertEqual(badge.icon, OpenPetsSurfaceIcons.battery25)
+        XCTAssertEqual(badge.value, "9%")
+        XCTAssertEqual(badge.tone, .critical)
+
+        XCTAssertEqual(OpenPetsBatterySurfacePlugin.reactionUpdates(for: OpenPetsBatterySnapshot(
+            percent: 9,
+            isCharging: false,
+            isPresent: true,
+            timeRemainingMinutes: 22
+        )), [
+            OpenPetsPetReactionUpdate(reactionID: "battery.low-energy", kind: .lowEnergy, priority: 90)
+        ])
+    }
+
+    func testBatterySurfacePluginKeepsChargingBatteryAsSuccessCloudSurface() {
+        let updates = OpenPetsBatterySurfacePlugin.surfaceUpdates(for: OpenPetsBatterySnapshot(
+            percent: 82,
+            isCharging: true,
+            isPresent: true,
+            timeRemainingMinutes: nil
+        ))
+
+        XCTAssertEqual(updates.map(\.surfaceID), ["battery.badge"])
+        let badge = try! XCTUnwrap(updates.first { $0.surfaceID == "battery.badge" })
+        XCTAssertEqual(badge.icon, OpenPetsSurfaceIcons.batteryCharging)
+        XCTAssertEqual(badge.value, "82%")
+        XCTAssertEqual(badge.tone, .success)
+
+        XCTAssertEqual(OpenPetsBatterySurfacePlugin.reactionUpdates(for: OpenPetsBatterySnapshot(
+            percent: 82,
+            isCharging: true,
+            isPresent: true,
+            timeRemainingMinutes: nil
+        )), [
+            OpenPetsPetReactionUpdate(reactionID: "battery.charging", kind: .charging, priority: 20)
+        ])
+    }
+
+    func testBatterySurfacePluginReturnsNoSurfacesWhenBatteryMissing() {
+        XCTAssertTrue(OpenPetsBatterySurfacePlugin.surfaceUpdates(for: nil).isEmpty)
+        XCTAssertTrue(OpenPetsBatterySurfacePlugin.reactionUpdates(for: nil).isEmpty)
+        XCTAssertTrue(OpenPetsBatterySurfacePlugin.surfaceUpdates(for: OpenPetsBatterySnapshot(
+            percent: 50,
+            isCharging: false,
+            isPresent: false,
+            timeRemainingMinutes: nil
+        )).isEmpty)
+        XCTAssertTrue(OpenPetsBatterySurfacePlugin.reactionUpdates(for: OpenPetsBatterySnapshot(
+            percent: 50,
+            isCharging: false,
+            isPresent: false,
+            timeRemainingMinutes: nil
+        )).isEmpty)
+    }
+
     func testCommandLineToolInstallerCreatesUserShim() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
