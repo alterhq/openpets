@@ -571,7 +571,7 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(updates[0].detail?.rows.first { $0.label == "Remaining" }?.value, "58%")
         XCTAssertEqual(updates[0].detail?.rows.first { $0.label == "Reset" }?.value, "1h 30m")
         XCTAssertEqual(updates[0].detail?.ttlSeconds, 12)
-        XCTAssertEqual(updates[1].slotPreference, [.hotspotBottomTrailing, .hotspotRight])
+        XCTAssertEqual(updates[1].slotPreference, [.hotspotBottomLeading, .hotspotLeft])
         XCTAssertEqual(updates[1].value, "7d 76%")
         XCTAssertEqual(updates[1].tone, .warning)
     }

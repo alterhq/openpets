@@ -331,7 +331,7 @@ final class OpenPetsCodexUsageSurfacePlugin {
             updates.append(surfaceUpdate(
                 for: secondary,
                 surfaceID: "codex.secondary",
-                slotPreference: [.hotspotBottomTrailing, .hotspotRight],
+                slotPreference: [.hotspotBottomLeading, .hotspotLeft],
                 priorityBoost: 0,
                 snapshot: snapshot,
                 now: now
