@@ -32,14 +32,17 @@ Plugins send `surface.update` messages:
       },
       {
         "label": "State",
-        "value": "Battery"
+        "value": "Unplugged"
       }
-    ]
+    ],
+    "actionURL": "x-apple.systempreferences:com.apple.Battery-Settings.extension",
+    "actionLabel": "Settings",
+    "ttlSeconds": 8
   }
 }
 ```
 
-Compact clouds show the `icon` and `value`. `label` is metadata for accessibility and future settings. `detail` is optional; when present, clicking the cloud opens the existing OpenPets detail bubble.
+Compact clouds show the `icon` and `value`. `label` is metadata for accessibility and future settings. `detail` is optional; when present, clicking the cloud opens a plain OpenPets detail bubble. `detail.ttlSeconds` can auto-clear that clicked bubble after a short delay, and `detail.actionURL` plus `detail.actionLabel` add a small action button.
 
 ## Icons
 

@@ -5,8 +5,10 @@ import OpenPetsKit
 struct OpenPetsBatterySnapshot: Equatable, Sendable {
     var percent: Int
     var isCharging: Bool
+    var isPlugged: Bool = false
     var isPresent: Bool
     var timeRemainingMinutes: Int?
+    var timeToFullChargeMinutes: Int? = nil
 }
 
 struct OpenPetsBatteryReader: Sendable {
@@ -39,16 +41,21 @@ struct OpenPetsBatteryReader: Sendable {
             }
 
             let state = description[kIOPSPowerSourceStateKey] as? String
-            let isCharging = (description[kIOPSIsChargingKey] as? Bool) ?? (state == kIOPSACPowerValue)
+            let isPlugged = state == kIOPSACPowerValue
+            let isCharging = (description[kIOPSIsChargingKey] as? Bool) ?? isPlugged
             let isPresent = (description[kIOPSIsPresentKey] as? Bool) ?? true
             let timeRemaining = description[kIOPSTimeToEmptyKey] as? Int
             let timeRemainingMinutes = timeRemaining.flatMap { $0 >= 0 ? $0 : nil }
+            let timeToFullCharge = description[kIOPSTimeToFullChargeKey] as? Int
+            let timeToFullChargeMinutes = timeToFullCharge.flatMap { $0 >= 0 ? $0 : nil }
 
             return OpenPetsBatterySnapshot(
                 percent: min(max(percent, 0), 100),
                 isCharging: isCharging,
+                isPlugged: isPlugged,
                 isPresent: isPresent,
-                timeRemainingMinutes: timeRemainingMinutes
+                timeRemainingMinutes: timeRemainingMinutes,
+                timeToFullChargeMinutes: timeToFullChargeMinutes
             )
         }
 
@@ -150,12 +157,21 @@ final class OpenPetsBatterySurfacePlugin {
     private nonisolated static func detail(for snapshot: OpenPetsBatterySnapshot) -> OpenPetsSurfaceDetailData {
         var rows = [
             OpenPetsSurfaceDetailRow(label: "Charge", value: "\(snapshot.percent)%", tone: tone(for: snapshot)),
-            OpenPetsSurfaceDetailRow(label: "State", value: snapshot.isCharging ? "Charging" : "Battery")
+            OpenPetsSurfaceDetailRow(label: "State", value: snapshot.isPlugged ? "Plugged" : "Unplugged")
         ]
         if let timeRemainingMinutes = snapshot.timeRemainingMinutes, !snapshot.isCharging {
             rows.append(OpenPetsSurfaceDetailRow(label: "Remaining", value: formattedDuration(minutes: timeRemainingMinutes)))
         }
-        return OpenPetsSurfaceDetailData(title: "Battery", rows: rows)
+        if let timeToFullChargeMinutes = snapshot.timeToFullChargeMinutes, snapshot.isPlugged, snapshot.percent < 100 {
+            rows.append(OpenPetsSurfaceDetailRow(label: "Full", value: formattedDuration(minutes: timeToFullChargeMinutes)))
+        }
+        return OpenPetsSurfaceDetailData(
+            title: "Battery",
+            rows: rows,
+            actionURL: "x-apple.systempreferences:com.apple.Battery-Settings.extension",
+            actionLabel: "Settings",
+            ttlSeconds: 8
+        )
     }
 
     private nonisolated static func tone(for snapshot: OpenPetsBatterySnapshot) -> OpenPetsSurfaceTone {

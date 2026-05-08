@@ -222,6 +222,13 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(updates.first?.tone, .normal)
         XCTAssertEqual(updates.first?.detail?.title, "Battery")
         XCTAssertEqual(updates.first?.detail?.rows.map(\.label), ["Charge", "State", "Remaining"])
+        XCTAssertEqual(updates.first?.detail?.rows.first { $0.label == "State" }?.value, "Unplugged")
+        XCTAssertEqual(
+            updates.first?.detail?.actionURL,
+            "x-apple.systempreferences:com.apple.Battery-Settings.extension"
+        )
+        XCTAssertEqual(updates.first?.detail?.actionLabel, "Settings")
+        XCTAssertEqual(updates.first?.detail?.ttlSeconds, 8)
     }
 
     func testBatterySurfacePluginKeepsLowBatteryAsCriticalCloudSurface() {
@@ -253,8 +260,10 @@ final class OpenPetsTests: XCTestCase {
         let updates = OpenPetsBatterySurfacePlugin.surfaceUpdates(for: OpenPetsBatterySnapshot(
             percent: 82,
             isCharging: true,
+            isPlugged: true,
             isPresent: true,
-            timeRemainingMinutes: nil
+            timeRemainingMinutes: nil,
+            timeToFullChargeMinutes: 48
         ))
 
         XCTAssertEqual(updates.map(\.surfaceID), ["battery.badge"])
@@ -262,12 +271,17 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(badge.icon, OpenPetsSurfaceIcons.batteryCharging)
         XCTAssertEqual(badge.value, "82%")
         XCTAssertEqual(badge.tone, .success)
+        XCTAssertEqual(badge.detail?.rows.map(\.label), ["Charge", "State", "Full"])
+        XCTAssertEqual(badge.detail?.rows.first { $0.label == "State" }?.value, "Plugged")
+        XCTAssertEqual(badge.detail?.rows.first { $0.label == "Full" }?.value, "48m")
 
         XCTAssertEqual(OpenPetsBatterySurfacePlugin.reactionUpdates(for: OpenPetsBatterySnapshot(
             percent: 82,
             isCharging: true,
+            isPlugged: true,
             isPresent: true,
-            timeRemainingMinutes: nil
+            timeRemainingMinutes: nil,
+            timeToFullChargeMinutes: 48
         )), [
             OpenPetsPetReactionUpdate(reactionID: "battery.charging", kind: .charging, priority: 20)
         ])
