@@ -403,7 +403,7 @@ final class OpenPetsCodexUsageSurfacePlugin {
             slotPreference: slotPreference,
             priority: priority(for: tone) + priorityBoost,
             icon: OpenPetsSurfaceIcons.quota,
-            value: "\(bucket.label) \(bucket.usedPercentage)%",
+            value: "\(bucket.label) \(bucket.remainingPercentage)%",
             label: "Codex \(bucket.label)",
             tone: tone,
             detail: detail(for: bucket, tone: tone, snapshot: snapshot, now: now)
@@ -417,13 +417,12 @@ final class OpenPetsCodexUsageSurfacePlugin {
         now: Date
     ) -> OpenPetsSurfaceDetailData {
         var rows = [
-            OpenPetsSurfaceDetailRow(label: "Used", value: "\(bucket.usedPercentage)%", tone: tone),
-            OpenPetsSurfaceDetailRow(label: "Remaining", value: "\(bucket.remainingPercentage)%"),
-            OpenPetsSurfaceDetailRow(label: "Source", value: snapshot.source.capitalized)
+            OpenPetsSurfaceDetailRow(label: "Remaining", value: "\(bucket.remainingPercentage)%", tone: tone),
+            OpenPetsSurfaceDetailRow(
+                label: "Reset",
+                value: bucket.resetDate.map { formattedReset($0, now: now) } ?? "Unknown"
+            )
         ]
-        if let resetDate = bucket.resetDate {
-            rows.insert(OpenPetsSurfaceDetailRow(label: "Reset", value: formattedReset(resetDate, now: now)), at: 2)
-        }
         if let planType = snapshot.planType, !planType.isEmpty {
             rows.append(OpenPetsSurfaceDetailRow(label: "Plan", value: planType))
         }
@@ -431,10 +430,10 @@ final class OpenPetsCodexUsageSurfacePlugin {
     }
 
     private nonisolated static func tone(for bucket: OpenPetsCodexUsageBucket) -> OpenPetsSurfaceTone {
-        if bucket.usedPercentage >= 90 {
+        if bucket.remainingPercentage <= 10 {
             return .critical
         }
-        if bucket.usedPercentage >= 70 {
+        if bucket.remainingPercentage <= 30 {
             return .warning
         }
         return .normal
@@ -455,17 +454,21 @@ final class OpenPetsCodexUsageSurfacePlugin {
 
     private nonisolated static func formattedReset(_ date: Date, now: Date = Date()) -> String {
         let minutes = max(0, Int(date.timeIntervalSince(now) / 60))
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate("MMM d HH:mm")
+        let absoluteTime = formatter.string(from: date)
+        let relativeTime: String
         if minutes >= 24 * 60 {
-            return "\(minutes / (24 * 60))d"
+            relativeTime = "\(minutes / (24 * 60))d"
+        } else if minutes >= 60 {
+            let hours = minutes / 60
+            let remainingMinutes = minutes % 60
+            relativeTime = remainingMinutes > 0 ? "\(hours)h \(remainingMinutes)m" : "\(hours)h"
+        } else {
+            relativeTime = "\(minutes)m"
         }
-        guard minutes >= 60 else {
-            return "\(minutes)m"
-        }
-        let hours = minutes / 60
-        let remainingMinutes = minutes % 60
-        guard remainingMinutes > 0 else {
-            return "\(hours)h"
-        }
-        return "\(hours)h \(remainingMinutes)m"
+        return "\(absoluteTime) (in \(relativeTime))"
     }
 }
