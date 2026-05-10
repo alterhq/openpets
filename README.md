@@ -66,6 +66,14 @@ The shared pet can show multiple task bubbles at once. A `notify` call returns a
 
 See [Shared Pet System](./docs/shared-pet-system.md) for the default socket topology, MCP behavior, `threadId` workflow, and guidance for app integrations.
 
+## Third-Party Integrations
+
+Community projects that talk to OpenPets:
+
+- [openpets-bridge](https://github.com/MacSiem/openpets-bridge) — Python daemon that tails the on-disk session logs of Cowork (Claude desktop), Codex CLI, and Claude Code CLI, and forwards their activity to OpenPets as threaded persistent bubbles. Supports both single-pet (one shared pet, AI icon prefix per bubble) and multi-pet (one OpenPets host per AI on its own socket) display modes. Useful when an agent runtime does not natively call the `notify` MCP tool.
+
+PRs adding more entries are welcome.
+
 ## Swift App Integration
 
 Swift apps should use [OpenPetsKit](https://github.com/alterhq/OpenPetsKit), the separate Swift package for embedding OpenPets. It contains the embeddable runtime, client APIs, and bundled Starcorn pet with minimal dependencies.
