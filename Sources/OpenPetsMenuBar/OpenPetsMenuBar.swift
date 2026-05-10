@@ -84,6 +84,20 @@ private struct BuiltInSurfacePlugin {
     static let defaultEnabledIDs: [String] = [
         "openpets.plugin.battery"
     ]
+
+    static func plugin(withID pluginID: String) -> BuiltInSurfacePlugin? {
+        all.first { $0.id == pluginID }
+    }
+}
+
+private final class SurfaceSlotMenuSelection {
+    let surfaceID: String
+    let slot: OpenPetsSurfaceSlot
+
+    init(surfaceID: String, slot: OpenPetsSurfaceSlot) {
+        self.surfaceID = surfaceID
+        self.slot = slot
+    }
 }
 
 @MainActor
@@ -156,6 +170,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     private let codexUsageSurfacePlugin = OpenPetsCodexUsageSurfacePlugin()
     private var surfaceUpdatesByPluginID: [String: [OpenPetsSurfaceUpdate]] = [:]
     private var petReactionUpdatesByPluginID: [String: [OpenPetsPetReactionUpdate]] = [:]
+    private var pendingSurfaceRevealPluginIDs = Set<String>()
 
     private lazy var startStopServerItem = NSMenuItem(
         title: "Start MCP Server",
@@ -327,6 +342,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         codexUsageSurfacePlugin.stop()
         surfaceUpdatesByPluginID.removeAll()
         petReactionUpdatesByPluginID.removeAll()
+        pendingSurfaceRevealPluginIDs.removeAll()
         petSession?.clearSurfaceUpdates()
         petSession?.clearPetReactionUpdates()
     }
@@ -602,13 +618,60 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
 
         do {
             var updatedConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
-            updatedConfiguration.setPlugin(pluginID, enabled: !updatedConfiguration.isPluginEnabled(pluginID))
+            let shouldEnable = !updatedConfiguration.isPluginEnabled(pluginID)
+            updatedConfiguration.setPlugin(pluginID, enabled: shouldEnable)
+            try updatedConfiguration.save()
+            configuration = updatedConfiguration
+            if shouldEnable {
+                pendingSurfaceRevealPluginIDs.insert(pluginID)
+            } else {
+                pendingSurfaceRevealPluginIDs.remove(pluginID)
+            }
+            applyPluginEnabledState(pluginID)
+            refreshMenu()
+        } catch {
+            showError("Could not update plugin", detail: error.localizedDescription)
+        }
+    }
+
+    @objc private func selectSurfaceSlot(_ sender: NSMenuItem) {
+        guard let selection = sender.representedObject as? SurfaceSlotMenuSelection else {
+            return
+        }
+
+        do {
+            var updatedConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
+            updatedConfiguration.surfaceSlotOverridesByID[selection.surfaceID] = selection.slot
+            try updatedConfiguration.save()
+            configuration = updatedConfiguration
+            applySurfaceUpdatesToPet()
+        } catch {
+            showError("Could not update hotspot position", detail: error.localizedDescription)
+        }
+    }
+
+    @objc private func openSurfaceDetail(_ sender: NSMenuItem) {
+        guard let surfaceID = sender.representedObject as? String else {
+            return
+        }
+
+        _ = petSession?.showSurfaceDetail(forSurfaceID: surfaceID)
+    }
+
+    @objc private func disableSurfacePlugin(_ sender: NSMenuItem) {
+        guard let pluginID = sender.representedObject as? String else {
+            return
+        }
+
+        do {
+            var updatedConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
+            updatedConfiguration.setPlugin(pluginID, enabled: false)
             try updatedConfiguration.save()
             configuration = updatedConfiguration
             applyPluginEnabledState(pluginID)
             refreshMenu()
         } catch {
-            showError("Could not update plugin", detail: error.localizedDescription)
+            showError("Could not disable plugin", detail: error.localizedDescription)
         }
     }
 
@@ -939,6 +1002,8 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         )
         let session = OpenPetsHostSession(configuration: hostConfiguration, contextMenuProvider: { [weak self] in
             self?.makePetContextMenu()
+        }, surfaceContextMenuProvider: { [weak self] surface in
+            self?.makeSurfaceContextMenu(for: surface)
         })
         try session.start()
         petSession = session
@@ -1010,13 +1075,18 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         )
     }
 
-    private func reloadConfiguration() {
+    func reloadConfiguration() {
         configuration = (try? OpenPetsConfiguration.load()) ?? OpenPetsConfiguration()
     }
 
-    private func setSurfaceUpdates(_ updates: [OpenPetsSurfaceUpdate], forPluginID pluginID: String) {
+    func setSurfaceUpdates(_ updates: [OpenPetsSurfaceUpdate], forPluginID pluginID: String) {
         surfaceUpdatesByPluginID[pluginID] = updates
-        applySurfaceUpdatesToPet()
+        let resolvedSurfaces = applySurfaceUpdatesToPet()
+        revealSurfacePositionsIfNeeded(
+            forPluginID: pluginID,
+            updates: updates,
+            resolvedSurfaces: resolvedSurfaces
+        )
     }
 
     private func setPetReactionUpdates(_ updates: [OpenPetsPetReactionUpdate], forPluginID pluginID: String) {
@@ -1024,12 +1094,54 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         applyPetReactionUpdatesToPet()
     }
 
-    private func applySurfaceUpdatesToPet() {
-        guard let petSession, petSession.isRunning else { return }
+    @discardableResult
+    private func applySurfaceUpdatesToPet() -> [OpenPetsResolvedSurface] {
+        guard let petSession, petSession.isRunning else {
+            return []
+        }
         let updates = surfaceUpdatesByPluginID.keys
             .sorted()
             .flatMap { surfaceUpdatesByPluginID[$0] ?? [] }
-        _ = petSession.setSurfaceUpdates(updates)
+            .map(applyingSurfaceSlotOverride)
+        return petSession.setSurfaceUpdates(updates)
+    }
+
+    private func revealSurfacePositionsIfNeeded(
+        forPluginID pluginID: String,
+        updates: [OpenPetsSurfaceUpdate],
+        resolvedSurfaces: [OpenPetsResolvedSurface]
+    ) {
+        let targetIDs = surfaceRevealTargetIDs(for: updates)
+        let visibleTargetIDs = Set<String>(resolvedSurfaces.compactMap { surface in
+            guard case .placed = surface.placement, targetIDs.contains(surface.update.surfaceID) else {
+                return nil
+            }
+            return surface.update.surfaceID
+        })
+        guard
+            pendingSurfaceRevealPluginIDs.contains(pluginID),
+            !visibleTargetIDs.isEmpty,
+            petSession?.isRunning == true
+        else {
+            return
+        }
+
+        pendingSurfaceRevealPluginIDs.remove(pluginID)
+        petSession?.revealSurfacePositions(surfaceIDs: visibleTargetIDs)
+    }
+
+    func surfaceRevealTargetIDs(for updates: [OpenPetsSurfaceUpdate]) -> Set<String> {
+        Set(updates.map(\.surfaceID))
+    }
+
+    func applyingSurfaceSlotOverride(to update: OpenPetsSurfaceUpdate) -> OpenPetsSurfaceUpdate {
+        guard let override = configuration.surfaceSlotOverridesByID[update.surfaceID] else {
+            return update
+        }
+
+        var updated = update
+        updated.slotPreference = [override] + update.slotPreference.filter { $0 != override }
+        return updated
     }
 
     private func applyPetReactionUpdatesToPet() {
@@ -1117,6 +1229,66 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         }
         pluginsItem.submenu = menu
         pluginsItem.title = "Plugins"
+    }
+
+    func makeSurfaceContextMenu(for surface: OpenPetsResolvedSurface) -> NSMenu? {
+        guard case .placed(let currentSlot) = surface.placement else {
+            return nil
+        }
+
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let positionItem = NSMenuItem(title: "Position: \(surfaceSlotTitle(for: currentSlot))", action: nil, keyEquivalent: "")
+        positionItem.isEnabled = false
+        menu.addItem(positionItem)
+
+        let moveItem = NSMenuItem(title: "Move to", action: nil, keyEquivalent: "")
+        let moveMenu = NSMenu()
+        moveMenu.autoenablesItems = false
+        for slot in OpenPetsSurfaceSlots.defaultOrder {
+            let item = NSMenuItem(title: surfaceSlotTitle(for: slot), action: #selector(selectSurfaceSlot(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = SurfaceSlotMenuSelection(surfaceID: surface.update.surfaceID, slot: slot)
+            item.state = slot == currentSlot ? .on : .off
+            moveMenu.addItem(item)
+        }
+        moveItem.submenu = moveMenu
+        menu.addItem(moveItem)
+
+        let detailItem = NSMenuItem(title: "Open Details", action: #selector(openSurfaceDetail(_:)), keyEquivalent: "")
+        detailItem.target = self
+        detailItem.representedObject = surface.update.surfaceID
+        detailItem.isEnabled = surface.update.detail != nil
+        menu.addItem(detailItem)
+
+        if let pluginID = pluginID(forSurfaceID: surface.update.surfaceID),
+           let plugin = BuiltInSurfacePlugin.plugin(withID: pluginID)
+        {
+            menu.addItem(.separator())
+            let disableItem = NSMenuItem(title: "Disable \(plugin.name)", action: #selector(disableSurfacePlugin(_:)), keyEquivalent: "")
+            disableItem.target = self
+            disableItem.representedObject = pluginID
+            menu.addItem(disableItem)
+        }
+
+        return menu
+    }
+
+    private func pluginID(forSurfaceID surfaceID: String) -> String? {
+        surfaceUpdatesByPluginID.first { _, updates in
+            updates.contains { $0.surfaceID == surfaceID }
+        }?.key
+    }
+
+    private func surfaceSlotTitle(for slot: OpenPetsSurfaceSlot) -> String {
+        if slot == .hotspotTopTrailing { return "Top Trailing" }
+        if slot == .hotspotTopLeading { return "Top Leading" }
+        if slot == .hotspotRight { return "Right" }
+        if slot == .hotspotBottomTrailing { return "Bottom Trailing" }
+        if slot == .hotspotBottomLeading { return "Bottom Leading" }
+        if slot == .hotspotLeft { return "Left" }
+        return slot.rawValue
     }
 
     private func showStartupPetGreeting() {

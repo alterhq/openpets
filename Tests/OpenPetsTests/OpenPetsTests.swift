@@ -131,6 +131,126 @@ final class OpenPetsTests: XCTestCase {
     }
 
     @MainActor
+    func testSurfaceContextMenuShowsPositionDetailsAndPluginActions() throws {
+        try withTemporaryXDGConfigHome {
+            let controller = OpenPetsMenuBarController()
+            let update = OpenPetsSurfaceUpdate(
+                surfaceID: "battery.badge",
+                slotPreference: [.hotspotTopTrailing, .hotspotRight],
+                icon: OpenPetsSurfaceIcons.battery75,
+                value: "68%",
+                label: "Battery",
+                detail: OpenPetsSurfaceDetailData(title: "Battery", rows: [
+                    OpenPetsSurfaceDetailRow(label: "Charge", value: "68%")
+                ])
+            )
+            controller.setSurfaceUpdates([update], forPluginID: OpenPetsBatterySurfacePlugin.pluginID)
+
+            let menu = try XCTUnwrap(controller.makeSurfaceContextMenu(for: OpenPetsResolvedSurface(
+                update: update,
+                placement: .placed(.hotspotTopTrailing)
+            )))
+
+            XCTAssertEqual(menu.items.first?.title, "Position: Top Trailing")
+            XCTAssertFalse(menu.items.first?.isEnabled ?? true)
+
+            let moveItem = try XCTUnwrap(menu.items.first { $0.title == "Move to" })
+            let moveMenu = try XCTUnwrap(moveItem.submenu)
+            XCTAssertEqual(
+                moveMenu.items.map(\.title),
+                ["Top Trailing", "Top Leading", "Right", "Bottom Trailing", "Bottom Leading", "Left"]
+            )
+            XCTAssertEqual(moveMenu.items.first { $0.title == "Top Trailing" }?.state, .on)
+            XCTAssertEqual(moveMenu.items.first { $0.title == "Right" }?.state, .off)
+
+            let detailItem = try XCTUnwrap(menu.items.first { $0.title == "Open Details" })
+            XCTAssertTrue(detailItem.isEnabled)
+            XCTAssertEqual(detailItem.representedObject as? String, "battery.badge")
+            XCTAssertNotNil(detailItem.action)
+
+            let disableItem = try XCTUnwrap(menu.items.first { $0.title == "Disable Battery" })
+            XCTAssertEqual(disableItem.representedObject as? String, OpenPetsBatterySurfacePlugin.pluginID)
+            XCTAssertNotNil(disableItem.action)
+        }
+    }
+
+    @MainActor
+    func testSurfaceContextMenuDisablesOpenDetailsWhenSurfaceHasNoDetail() throws {
+        let controller = OpenPetsMenuBarController()
+        let update = OpenPetsSurfaceUpdate(
+            surfaceID: "battery.badge",
+            icon: OpenPetsSurfaceIcons.battery75,
+            value: "68%",
+            label: "Battery"
+        )
+
+        let menu = try XCTUnwrap(controller.makeSurfaceContextMenu(for: OpenPetsResolvedSurface(
+            update: update,
+            placement: .placed(.hotspotTopTrailing)
+        )))
+
+        let detailItem = try XCTUnwrap(menu.items.first { $0.title == "Open Details" })
+        XCTAssertFalse(detailItem.isEnabled)
+    }
+
+    @MainActor
+    func testSelectingSurfaceSlotPersistsOverrideAndReordersPreferences() throws {
+        try withTemporaryXDGConfigHome {
+            let controller = OpenPetsMenuBarController()
+            let update = OpenPetsSurfaceUpdate(
+                surfaceID: "battery.badge",
+                slotPreference: [.hotspotTopTrailing, .hotspotRight],
+                icon: OpenPetsSurfaceIcons.battery75,
+                value: "68%",
+                label: "Battery"
+            )
+            controller.setSurfaceUpdates([update], forPluginID: OpenPetsBatterySurfacePlugin.pluginID)
+
+            let menu = try XCTUnwrap(controller.makeSurfaceContextMenu(for: OpenPetsResolvedSurface(
+                update: update,
+                placement: .placed(.hotspotTopTrailing)
+            )))
+            let rightItem = try XCTUnwrap(menu.items
+                .first { $0.title == "Move to" }?
+                .submenu?
+                .items
+                .first { $0.title == "Right" })
+            let action = try XCTUnwrap(rightItem.action)
+
+            XCTAssertTrue(NSApplication.shared.sendAction(action, to: rightItem.target, from: rightItem))
+
+            let reloaded = try OpenPetsConfiguration.load()
+            XCTAssertEqual(reloaded.surfaceSlotOverridesByID["battery.badge"], .hotspotRight)
+
+            controller.reloadConfiguration()
+            XCTAssertEqual(
+                controller.applyingSurfaceSlotOverride(to: update).slotPreference,
+                [.hotspotRight, .hotspotTopTrailing]
+            )
+        }
+    }
+
+    @MainActor
+    func testSurfaceRevealTargetsOnlyEnabledPluginSurfaceIDs() {
+        let controller = OpenPetsMenuBarController()
+        let updates = [
+            OpenPetsSurfaceUpdate(
+                surfaceID: "claude.5h",
+                icon: OpenPetsSurfaceIcons.sparkles,
+                value: "42%"
+            ),
+            OpenPetsSurfaceUpdate(
+                surfaceID: "claude.7d",
+                icon: OpenPetsSurfaceIcons.clock,
+                value: "18%"
+            )
+        ]
+
+        XCTAssertEqual(controller.surfaceRevealTargetIDs(for: updates), ["claude.5h", "claude.7d"])
+        XCTAssertEqual(controller.surfaceRevealTargetIDs(for: []), [])
+    }
+
+    @MainActor
     func testMenuIncludesScaleSubmenu() throws {
         let controller = OpenPetsMenuBarController()
         let menu = controller.makeStatusItemMenu()
