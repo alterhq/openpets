@@ -80,6 +80,10 @@ private struct BuiltInSurfacePlugin {
         BuiltInSurfacePlugin(id: "openpets.plugin.claude-code", name: "Claude Code"),
         BuiltInSurfacePlugin(id: "openpets.plugin.codex-usage", name: "Codex Usage")
     ]
+
+    static let defaultEnabledIDs: [String] = [
+        "openpets.plugin.battery"
+    ]
 }
 
 @MainActor
@@ -1243,18 +1247,30 @@ private enum OpenPetsMenuBarError: Error, LocalizedError {
     }
 }
 
-private extension OpenPetsConfiguration {
+extension OpenPetsConfiguration {
     func isPluginEnabled(_ pluginID: String) -> Bool {
-        !disabledPluginIDs.contains(pluginID)
+        guard !disabledPluginIDs.contains(pluginID) else {
+            return false
+        }
+
+        return BuiltInSurfacePlugin.defaultEnabledIDs.contains(pluginID)
+            || enabledPluginIDs.contains(pluginID)
     }
 
     mutating func setPlugin(_ pluginID: String, enabled: Bool) {
+        enabledPluginIDs.removeAll { $0 == pluginID }
+        disabledPluginIDs.removeAll { $0 == pluginID }
+
         if enabled {
-            disabledPluginIDs.removeAll { $0 == pluginID }
-        } else if !disabledPluginIDs.contains(pluginID) {
+            if !BuiltInSurfacePlugin.defaultEnabledIDs.contains(pluginID) {
+                enabledPluginIDs.append(pluginID)
+            }
+        } else {
             disabledPluginIDs.append(pluginID)
-            disabledPluginIDs.sort()
         }
+
+        enabledPluginIDs.sort()
+        disabledPluginIDs.sort()
     }
 
     var normalizedMCPEndpoint: String {

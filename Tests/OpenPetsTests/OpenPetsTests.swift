@@ -79,23 +79,55 @@ final class OpenPetsTests: XCTestCase {
 
     @MainActor
     func testMenuIncludesPluginToggleSubmenu() throws {
-        let controller = OpenPetsMenuBarController()
-        let menu = controller.makeStatusItemMenu()
+        try withTemporaryXDGConfigHome {
+            let controller = OpenPetsMenuBarController()
+            let menu = controller.makeStatusItemMenu()
 
-        let pluginsItem = try XCTUnwrap(menu.items.first { $0.title == "Plugins" })
-        let submenu = try XCTUnwrap(pluginsItem.submenu)
+            let pluginsItem = try XCTUnwrap(menu.items.first { $0.title == "Plugins" })
+            let submenu = try XCTUnwrap(pluginsItem.submenu)
 
-        XCTAssertEqual(submenu.items.map(\.title), ["Battery", "Claude Code", "Codex Usage"])
-        XCTAssertTrue(submenu.items.allSatisfy { $0.action != nil })
-        XCTAssertEqual(submenu.items.first { $0.title == "Battery" }?.representedObject as? String, OpenPetsBatterySurfacePlugin.pluginID)
-        XCTAssertEqual(
-            submenu.items.first { $0.title == "Claude Code" }?.representedObject as? String,
-            OpenPetsClaudeCodeSurfacePlugin.pluginID
-        )
-        XCTAssertEqual(
-            submenu.items.first { $0.title == "Codex Usage" }?.representedObject as? String,
-            OpenPetsCodexUsageSurfacePlugin.pluginID
-        )
+            XCTAssertEqual(submenu.items.map(\.title), ["Battery", "Claude Code", "Codex Usage"])
+            XCTAssertTrue(submenu.items.allSatisfy { $0.action != nil })
+            XCTAssertEqual(submenu.items.first { $0.title == "Battery" }?.representedObject as? String, OpenPetsBatterySurfacePlugin.pluginID)
+            XCTAssertEqual(
+                submenu.items.first { $0.title == "Claude Code" }?.representedObject as? String,
+                OpenPetsClaudeCodeSurfacePlugin.pluginID
+            )
+            XCTAssertEqual(
+                submenu.items.first { $0.title == "Codex Usage" }?.representedObject as? String,
+                OpenPetsCodexUsageSurfacePlugin.pluginID
+            )
+            XCTAssertEqual(submenu.items.first { $0.title == "Battery" }?.state, .on)
+            XCTAssertEqual(submenu.items.first { $0.title == "Claude Code" }?.state, .off)
+            XCTAssertEqual(submenu.items.first { $0.title == "Codex Usage" }?.state, .off)
+        }
+    }
+
+    func testPluginTogglePersistsNonDefaultPluginOptIn() throws {
+        let batteryPluginID = "openpets.plugin.battery"
+        let claudeCodePluginID = "openpets.plugin.claude-code"
+        var configuration = OpenPetsConfiguration()
+
+        XCTAssertTrue(configuration.isPluginEnabled(batteryPluginID))
+        XCTAssertFalse(configuration.isPluginEnabled(claudeCodePluginID))
+
+        configuration.setPlugin(claudeCodePluginID, enabled: true)
+
+        XCTAssertTrue(configuration.isPluginEnabled(claudeCodePluginID))
+        XCTAssertEqual(configuration.enabledPluginIDs, [claudeCodePluginID])
+        XCTAssertEqual(configuration.disabledPluginIDs, [])
+
+        configuration.setPlugin(claudeCodePluginID, enabled: false)
+
+        XCTAssertFalse(configuration.isPluginEnabled(claudeCodePluginID))
+        XCTAssertEqual(configuration.enabledPluginIDs, [])
+        XCTAssertEqual(configuration.disabledPluginIDs, [claudeCodePluginID])
+
+        configuration.setPlugin(batteryPluginID, enabled: false)
+
+        XCTAssertFalse(configuration.isPluginEnabled(batteryPluginID))
+        XCTAssertEqual(configuration.enabledPluginIDs, [])
+        XCTAssertEqual(configuration.disabledPluginIDs, [batteryPluginID, claudeCodePluginID])
     }
 
     @MainActor
