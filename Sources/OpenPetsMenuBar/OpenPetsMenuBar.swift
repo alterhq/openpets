@@ -38,6 +38,7 @@ private final class OpenPetsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
         controller.installMenu()
         controller.startMCPServer()
         controller.startSurfacePlugins()
+        controller.preloadInstalledPets()
         if shouldShowOnboarding {
             controller.showAgentOnboarding()
         }
@@ -55,6 +56,7 @@ private final class OpenPetsMenuBarAppDelegate: NSObject, NSApplicationDelegate 
             andEventID: AEEventID(kAEGetURL)
         )
         controller.cleanupInstallPreview()
+        controller.stopPreloadingPets()
         controller.stopSurfacePlugins()
         controller.stopPet()
         controller.stopMCPServer()
@@ -157,6 +159,8 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         userDriverDelegate: nil
     )
     private var configuration = OpenPetsConfiguration()
+    private let petAssetCache = OpenPetsPetAssetCache.shared
+    private var petPreloadTask: Task<Void, Never>?
     private var petSession: OpenPetsHostSession?
     private var mcpApp: OpenPetsMCPHTTPApp?
     private var mcpTask: Task<Void, Never>?
@@ -358,6 +362,34 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         pendingSurfaceRevealPluginIDs.removeAll()
         petSession?.clearSurfaceUpdates()
         petSession?.clearPetReactionUpdates()
+    }
+
+    func preloadInstalledPets() {
+        reloadConfiguration()
+        let library = OpenPetsPetLibrary()
+        let pets = library.listPets().sorted { lhs, rhs in
+            if lhs.id == configuration.activePetID { return true }
+            if rhs.id == configuration.activePetID { return false }
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+        let requests = pets.map { pet in
+            OpenPetsPetAssetPreloadRequest(
+                petDirectoryURL: pet.directoryURL,
+                display: configuration.display(forPetID: pet.id)
+            )
+        }
+        guard !requests.isEmpty else { return }
+
+        petPreloadTask?.cancel()
+        let petAssetCache = petAssetCache
+        petPreloadTask = Task(priority: .utility) {
+            await petAssetCache.preloadPets(requests)
+        }
+    }
+
+    func stopPreloadingPets() {
+        petPreloadTask?.cancel()
+        petPreloadTask = nil
     }
 
     private func startBatterySurfacePlugin() {
@@ -612,20 +644,24 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         if petSession?.isRunning == true {
             stopPet()
         } else {
-            do {
-                try wakePet()
-            } catch {
-                showError("Could not wake pet", detail: error.localizedDescription)
+            Task { @MainActor in
+                do {
+                    try await wakePet()
+                } catch {
+                    showError("Could not wake pet", detail: error.localizedDescription)
+                }
             }
         }
     }
 
     @objc private func callPet() {
-        do {
-            try wakePet()
-            petSession?.callPet()
-        } catch {
-            showError("Could not call pet", detail: error.localizedDescription)
+        Task { @MainActor in
+            do {
+                try await wakePet()
+                petSession?.callPet()
+            } catch {
+                showError("Could not call pet", detail: error.localizedDescription)
+            }
         }
     }
 
@@ -753,14 +789,19 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             updatedConfiguration.activePetID = petID
             try updatedConfiguration.save()
             configuration = updatedConfiguration
-            let shouldRestart = petSession?.isRunning == true
-            if shouldRestart {
-                stopPet()
-                try wakePet()
-            }
+            preloadInstalledPets()
             refreshMenu()
         } catch {
             showError("Could not switch pet", detail: error.localizedDescription)
+            return
+        }
+
+        Task { @MainActor in
+            do {
+                try await switchActivePetIfRunning()
+            } catch {
+                showError("Could not switch pet", detail: error.localizedDescription)
+            }
         }
     }
 
@@ -774,14 +815,19 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             updatedConfiguration.setScale(CGFloat(number.doubleValue), forPetID: updatedConfiguration.activePetID)
             try updatedConfiguration.save()
             configuration = updatedConfiguration
-            let shouldRestart = petSession?.isRunning == true
-            if shouldRestart {
-                stopPet()
-                try wakePet()
-            }
+            preloadInstalledPets()
             refreshMenu()
         } catch {
             showError("Could not update pet scale", detail: error.localizedDescription)
+            return
+        }
+
+        Task { @MainActor in
+            do {
+                try await switchActivePetIfRunning()
+            } catch {
+                showError("Could not update pet scale", detail: error.localizedDescription)
+            }
         }
     }
 
@@ -922,15 +968,23 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 }.value
                 await MainActor.run {
                     self.configuration.activePetID = result.petID
-                    if self.petSession?.isRunning == true {
-                        self.stopPet()
-                    }
-                    do {
-                        try self.wakePet()
-                    } catch {
+                }
+                do {
+                    await self.petAssetCache.preloadPet(
+                        at: result.directoryURL,
+                        display: await MainActor.run {
+                            self.configuration.display(forPetID: result.petID)
+                        }
+                    )
+                    try await self.switchActivePet()
+                } catch {
+                    await MainActor.run {
                         self.showInstallError("Installed pet, but could not load it: \(error.localizedDescription)")
-                        return
                     }
+                    return
+                }
+                await MainActor.run {
+                    self.preloadInstalledPets()
                     self.refreshMenu()
                     self.finishInstallPreview()
                 }
@@ -1029,7 +1083,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
-    func wakePet() throws {
+    func wakePet() async throws {
         if petSession?.isRunning == true {
             return
         }
@@ -1045,12 +1099,31 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             self?.makePetContextMenu()
         }, surfaceContextMenuProvider: { [weak self] surface in
             self?.makeSurfaceContextMenu(for: surface)
-        })
-        try session.start()
+        }, petAssetCache: petAssetCache)
+        try await session.startUsingCachedAssets()
         petSession = session
         applySurfaceUpdatesToPet()
         batterySurfacePlugin.refresh()
         refreshMenu()
+    }
+
+    private func switchActivePetIfRunning() async throws {
+        guard petSession?.isRunning == true else { return }
+        try await switchActivePet()
+    }
+
+    private func switchActivePet() async throws {
+        reloadConfiguration()
+        let petDirectoryURL = OpenPetsPetLibrary().activePetURL(for: configuration)
+        let display = configuration.display(forPetID: configuration.activePetID)
+        if let petSession {
+            try await petSession.switchPet(to: petDirectoryURL, display: display)
+        } else {
+            try await wakePet()
+        }
+        applySurfaceUpdatesToPet()
+        applyPetReactionUpdatesToPet()
+        batterySurfacePlugin.refresh()
     }
 
     func stopPet() {
@@ -1060,8 +1133,8 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         refreshMenu()
     }
 
-    func wakePetForMCP() throws -> String {
-        try wakePet()
+    func wakePetForMCP() async throws -> String {
+        try await wakePet()
         return "pet is awake"
     }
 
@@ -1070,10 +1143,10 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         return "pet is stopped"
     }
 
-    func notifyForMCP(_ notification: PetNotification) throws -> PetResponse {
+    func notifyForMCP(_ notification: PetNotification) async throws -> PetResponse {
         let wasRunning = petSession?.isRunning == true
         do {
-            try wakePet()
+            try await wakePet()
         } catch {
             refreshMenu()
             return PetResponse(
@@ -1335,17 +1408,19 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func showStartupPetGreeting() {
-        do {
-            let response = try notifyForMCP(PetNotification(
-                title: "Hey there!",
-                status: "message",
-                ttlSeconds: 4
-            ))
-            if !response.ok {
-                logger.warning("Could not show startup pet greeting", metadata: ["message": "\(response.message ?? "unknown")"])
+        Task { @MainActor in
+            do {
+                let response = try await notifyForMCP(PetNotification(
+                    title: "Hey there!",
+                    status: "message",
+                    ttlSeconds: 4
+                ))
+                if !response.ok {
+                    logger.warning("Could not show startup pet greeting", metadata: ["message": "\(response.message ?? "unknown")"])
+                }
+            } catch {
+                logger.warning("Could not wake pet for startup greeting", metadata: ["error": "\(error.localizedDescription)"])
             }
-        } catch {
-            logger.warning("Could not wake pet for startup greeting", metadata: ["error": "\(error.localizedDescription)"])
         }
     }
 
