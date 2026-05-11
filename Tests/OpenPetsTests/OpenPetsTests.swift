@@ -57,21 +57,44 @@ final class OpenPetsTests: XCTestCase {
         let titles = menuItemTitles(menu)
 
         XCTAssertEqual(
-            titles.firstIndex(of: "Call my pet"),
+            titles.firstIndex(of: "Call My Pet"),
             titles.firstIndex(of: "Wake Pet").map { $0 + 1 }
+        )
+        XCTAssertEqual(
+            titles.firstIndex(of: "Clear All Notifications"),
+            titles.firstIndex(of: "Call My Pet").map { $0 + 1 }
+        )
+        XCTAssertEqual(
+            titles.firstIndex { $0.hasPrefix("Active Pet:") },
+            titles.firstIndex(of: "Clear All Notifications").map { $0 + 1 }
         )
     }
 
     @MainActor
-    func testMenusIncludeGalleryInstallerCLIInstallerAndVersion() throws {
+    func testMenusIncludeGallerySettingsAssistantConnectionAndVersion() throws {
         let controller = OpenPetsMenuBarController()
         let menu = controller.makeStatusItemMenu()
         let titles = menuItemTitles(menu)
 
-        XCTAssertTrue(titles.contains("Install pets..."))
+        XCTAssertTrue(titles.contains("Install Pets..."))
         XCTAssertTrue(titles.contains("Plugins"))
-        XCTAssertTrue(titles.contains("Install CLI"))
-        XCTAssertFalse(titles.contains("Install Command Line Tool"))
+        XCTAssertTrue(titles.contains("Connect Assistants..."))
+        XCTAssertFalse(titles.contains("Set Up AI Assistants..."))
+        XCTAssertFalse(titles.contains("Install CLI"))
+
+        let settingsItem = try XCTUnwrap(menu.items.first { $0.title == "Settings" })
+        let settingsMenu = try XCTUnwrap(settingsItem.submenu)
+        XCTAssertEqual(
+            menuItemTitles(settingsMenu),
+            [
+                "Server Status: Stopped",
+                "Start MCP Server",
+                "Copy MCP URL",
+                "<separator>",
+                "Open Config Folder",
+                "Install CLI Tool"
+            ]
+        )
 
         let versionItem = try XCTUnwrap(menu.items.first { $0.title.hasPrefix("Version ") })
         XCTAssertFalse(versionItem.isEnabled)

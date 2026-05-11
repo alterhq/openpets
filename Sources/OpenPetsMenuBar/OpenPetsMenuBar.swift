@@ -193,8 +193,13 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         keyEquivalent: ""
     )
     private lazy var callPetItem = NSMenuItem(
-        title: "Call my pet",
+        title: "Call My Pet",
         action: #selector(callPet),
+        keyEquivalent: ""
+    )
+    private lazy var clearAllNotificationsItem = NSMenuItem(
+        title: "Clear All Notifications",
+        action: #selector(clearAllNotifications),
         keyEquivalent: ""
     )
     private lazy var activePetItem = NSMenuItem(
@@ -208,7 +213,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         keyEquivalent: ""
     )
     private lazy var installPetsItem = NSMenuItem(
-        title: "Install pets...",
+        title: "Install Pets...",
         action: #selector(openPetsGallery),
         keyEquivalent: ""
     )
@@ -230,13 +235,18 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         keyEquivalent: ""
     )
     private lazy var installCommandLineToolItem = NSMenuItem(
-        title: "Install CLI",
+        title: "Install CLI Tool",
         action: #selector(installCommandLineTool),
         keyEquivalent: ""
     )
     private lazy var setUpAgentsItem = NSMenuItem(
-        title: "Set Up AI Assistants...",
+        title: "Connect Assistants...",
         action: #selector(setUpAgents),
+        keyEquivalent: ""
+    )
+    private lazy var settingsItem = NSMenuItem(
+        title: "Settings",
+        action: nil,
         keyEquivalent: ""
     )
     private lazy var checkForUpdatesItem = NSMenuItem(
@@ -261,6 +271,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         var copyServerURLItem: NSMenuItem
         var wakeStopPetItem: NSMenuItem
         var callPetItem: NSMenuItem
+        var clearAllNotificationsItem: NSMenuItem
         var activePetItem: NSMenuItem
         var scaleItem: NSMenuItem
         var installPetsItem: NSMenuItem
@@ -269,6 +280,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         var openConfigItem: NSMenuItem
         var installCommandLineToolItem: NSMenuItem
         var setUpAgentsItem: NSMenuItem
+        var settingsItem: NSMenuItem
         var checkForUpdatesItem: NSMenuItem
         var appVersionItem: NSMenuItem
         var quitItem: NSMenuItem
@@ -280,6 +292,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 copyServerURLItem,
                 wakeStopPetItem,
                 callPetItem,
+                clearAllNotificationsItem,
                 scaleItem,
                 installPetsItem,
                 pluginsItem,
@@ -414,6 +427,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             copyServerURLItem: copyServerURLItem,
             wakeStopPetItem: wakeStopPetItem,
             callPetItem: callPetItem,
+            clearAllNotificationsItem: clearAllNotificationsItem,
             activePetItem: activePetItem,
             scaleItem: scaleItem,
             installPetsItem: installPetsItem,
@@ -422,6 +436,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
             openConfigItem: openConfigItem,
             installCommandLineToolItem: installCommandLineToolItem,
             setUpAgentsItem: setUpAgentsItem,
+            settingsItem: settingsItem,
             checkForUpdatesItem: checkForUpdatesItem,
             appVersionItem: appVersionItem,
             quitItem: quitItem
@@ -461,8 +476,13 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 keyEquivalent: ""
             ),
             callPetItem: NSMenuItem(
-                title: "Call my pet",
+                title: "Call My Pet",
                 action: #selector(callPet),
+                keyEquivalent: ""
+            ),
+            clearAllNotificationsItem: NSMenuItem(
+                title: "Clear All Notifications",
+                action: #selector(clearAllNotifications),
                 keyEquivalent: ""
             ),
             activePetItem: NSMenuItem(
@@ -476,7 +496,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 keyEquivalent: ""
             ),
             installPetsItem: NSMenuItem(
-                title: "Install pets...",
+                title: "Install Pets...",
                 action: #selector(openPetsGallery),
                 keyEquivalent: ""
             ),
@@ -492,13 +512,18 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
                 keyEquivalent: ""
             ),
             installCommandLineToolItem: NSMenuItem(
-                title: "Install CLI",
+                title: "Install CLI Tool",
                 action: #selector(installCommandLineTool),
                 keyEquivalent: ""
             ),
             setUpAgentsItem: NSMenuItem(
-                title: "Set Up AI Assistants...",
+                title: "Connect Assistants...",
                 action: #selector(setUpAgents),
+                keyEquivalent: ""
+            ),
+            settingsItem: NSMenuItem(
+                title: "Settings",
+                action: nil,
                 keyEquivalent: ""
             ),
             checkForUpdatesItem: NSMenuItem(
@@ -525,28 +550,37 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         }
 
         let menu = NSMenu()
-        menu.addItem(items.startStopServerItem)
-        menu.addItem(items.serverStatusItem)
-        menu.addItem(items.copyServerURLItem)
-        menu.addItem(.separator())
         menu.addItem(items.wakeStopPetItem)
         menu.addItem(items.callPetItem)
+        menu.addItem(items.clearAllNotificationsItem)
         menu.addItem(items.activePetItem)
         menu.addItem(items.scaleItem)
         menu.addItem(items.installPetsItem)
-        menu.addItem(items.pluginsItem)
         if let installFromLinkItem = items.installFromLinkItem {
             menu.addItem(installFromLinkItem)
         }
         menu.addItem(.separator())
-        menu.addItem(items.openConfigItem)
-        menu.addItem(items.installCommandLineToolItem)
+        menu.addItem(items.pluginsItem)
         menu.addItem(items.setUpAgentsItem)
+        items.settingsItem.submenu = makeSettingsMenu(with: items)
+        menu.addItem(items.settingsItem)
+        menu.addItem(.separator())
         menu.addItem(items.checkForUpdatesItem)
         menu.addItem(items.appVersionItem)
         menu.addItem(.separator())
         menu.addItem(items.quitItem)
         refreshMenuItems(items)
+        return menu
+    }
+
+    private func makeSettingsMenu(with items: OpenPetsMenuItems) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(items.serverStatusItem)
+        menu.addItem(items.startStopServerItem)
+        menu.addItem(items.copyServerURLItem)
+        menu.addItem(.separator())
+        menu.addItem(items.openConfigItem)
+        menu.addItem(items.installCommandLineToolItem)
         return menu
     }
 
@@ -593,6 +627,13 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         } catch {
             showError("Could not call pet", detail: error.localizedDescription)
         }
+    }
+
+    @objc private func clearAllNotifications() {
+        guard petSession?.isRunning == true else {
+            return
+        }
+        _ = sendPetCommand(.clearMessages)
     }
 
     @objc private func openConfigFolder() {
