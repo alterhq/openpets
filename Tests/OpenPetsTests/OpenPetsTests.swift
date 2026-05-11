@@ -765,7 +765,7 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(updates[0].value, "5h 42%")
         XCTAssertEqual(updates[0].detail?.rows.map(\.label), ["Used", "Reset", "Pace"])
         XCTAssertEqual(updates[0].detail?.rows.first { $0.label == "Reset" }?.value, "1h 30m")
-        XCTAssertEqual(updates[0].detail?.rows.first { $0.label == "Pace" }?.value, "Headroom 28%")
+        XCTAssertEqual(updates[0].detail?.rows.first { $0.label == "Pace" }?.value, "28% under target")
         XCTAssertEqual(updates[0].detail?.ttlSeconds, 12)
         XCTAssertEqual(updates[1].slotPreference, [.hotspotBottomLeading, .hotspotLeft])
         XCTAssertEqual(updates[1].value, "7d 76%")
@@ -852,7 +852,7 @@ final class OpenPetsTests: XCTestCase {
     func testCodexUsageSurfacePluginShowsUsageCloudSurfaces() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let snapshot = OpenPetsCodexUsageSnapshot(
-            planType: nil,
+            planType: "plus",
             primary: OpenPetsCodexUsageBucket(
                 label: "5h",
                 usedPercentage: 42,
@@ -878,10 +878,12 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(updates[0].slotPreference, [.hotspotTopLeading, .hotspotLeft])
         XCTAssertEqual(updates[0].icon, OpenPetsSurfaceIcons.quota)
         XCTAssertEqual(updates[0].value, "5h 58%")
-        XCTAssertEqual(updates[0].detail?.rows.map(\.label), ["Remaining", "Reset"])
+        XCTAssertEqual(updates[0].detail?.rows.map(\.label), ["Remaining", "Reset", "Pace"])
         XCTAssertEqual(updates[0].detail?.rows.first { $0.label == "Remaining" }?.value, "58%")
+        XCTAssertEqual(updates[0].detail?.rows.first { $0.label == "Pace" }?.value, "28% under target")
         XCTAssertNil(updates[0].detail?.rows.first { $0.label == "Used" })
         XCTAssertNil(updates[0].detail?.rows.first { $0.label == "Source" })
+        XCTAssertNil(updates[0].detail?.rows.first { $0.label == "Plan" })
         let resetValue = try! XCTUnwrap(updates[0].detail?.rows.first { $0.label == "Reset" }?.value)
         XCTAssertTrue(resetValue.contains("in 1h 30m"))
         XCTAssertTrue(resetValue.contains(":"))
@@ -890,6 +892,7 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(updates[1].slotPreference, [.hotspotBottomLeading, .hotspotLeft])
         XCTAssertEqual(updates[1].value, "7d 24%")
         XCTAssertEqual(updates[1].tone, .warning)
+        XCTAssertEqual(updates[1].detail?.rows.first { $0.label == "Pace" }?.value, "19% over target")
     }
 
     func testCodexUsageSurfacePluginShowsSetupCloudWhenConfiguredButMissingUsageData() {

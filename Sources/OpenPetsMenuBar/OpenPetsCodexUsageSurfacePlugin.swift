@@ -323,7 +323,6 @@ final class OpenPetsCodexUsageSurfacePlugin {
                 surfaceID: "codex.primary",
                 slotPreference: [.hotspotTopLeading, .hotspotLeft],
                 priorityBoost: 4,
-                snapshot: snapshot,
                 now: now
             ))
         }
@@ -333,7 +332,6 @@ final class OpenPetsCodexUsageSurfacePlugin {
                 surfaceID: "codex.secondary",
                 slotPreference: [.hotspotBottomLeading, .hotspotLeft],
                 priorityBoost: 0,
-                snapshot: snapshot,
                 now: now
             ))
         }
@@ -343,7 +341,6 @@ final class OpenPetsCodexUsageSurfacePlugin {
                 surfaceID: "codex.additional",
                 slotPreference: [.hotspotBottomLeading, .hotspotLeft],
                 priorityBoost: -5,
-                snapshot: snapshot,
                 now: now
             ))
         }
@@ -394,7 +391,6 @@ final class OpenPetsCodexUsageSurfacePlugin {
         surfaceID: String,
         slotPreference: [OpenPetsSurfaceSlot],
         priorityBoost: Int,
-        snapshot: OpenPetsCodexUsageSnapshot,
         now: Date
     ) -> OpenPetsSurfaceUpdate {
         let tone = tone(for: bucket)
@@ -406,26 +402,23 @@ final class OpenPetsCodexUsageSurfacePlugin {
             value: "\(bucket.label) \(bucket.remainingPercentage)%",
             label: "Codex \(bucket.label)",
             tone: tone,
-            detail: detail(for: bucket, tone: tone, snapshot: snapshot, now: now)
+            detail: detail(for: bucket, tone: tone, now: now)
         )
     }
 
     private nonisolated static func detail(
         for bucket: OpenPetsCodexUsageBucket,
         tone: OpenPetsSurfaceTone,
-        snapshot: OpenPetsCodexUsageSnapshot,
         now: Date
     ) -> OpenPetsSurfaceDetailData {
-        var rows = [
+        let rows = [
             OpenPetsSurfaceDetailRow(label: "Remaining", value: "\(bucket.remainingPercentage)%", tone: tone),
             OpenPetsSurfaceDetailRow(
                 label: "Reset",
                 value: bucket.resetDate.map { formattedReset($0, now: now) } ?? "Unknown"
-            )
+            ),
+            OpenPetsSurfaceDetailRow(label: "Pace", value: paceDescription(for: bucket, now: now))
         ]
-        if let planType = snapshot.planType, !planType.isEmpty {
-            rows.append(OpenPetsSurfaceDetailRow(label: "Plan", value: planType))
-        }
         return OpenPetsSurfaceDetailData(title: "Codex \(bucket.label)", rows: rows, ttlSeconds: 12)
     }
 
@@ -450,6 +443,40 @@ final class OpenPetsCodexUsageSurfacePlugin {
         case .normal, .muted:
             30
         }
+    }
+
+    private nonisolated static func paceDescription(
+        for bucket: OpenPetsCodexUsageBucket,
+        now: Date
+    ) -> String {
+        guard let delta = paceDelta(for: bucket, now: now) else {
+            return "Pace unknown"
+        }
+        if delta > 0 {
+            return "\(delta)% over target"
+        }
+        if delta < 0 {
+            return "\(abs(delta))% under target"
+        }
+        return "On track"
+    }
+
+    private nonisolated static func paceDelta(
+        for bucket: OpenPetsCodexUsageBucket,
+        now: Date
+    ) -> Int? {
+        guard
+            let resetDate = bucket.resetDate,
+            let windowMinutes = bucket.windowMinutes,
+            windowMinutes > 0
+        else {
+            return nil
+        }
+
+        let remainingMinutes = max(0, Int(resetDate.timeIntervalSince(now) / 60))
+        guard remainingMinutes <= windowMinutes else { return nil }
+        let elapsedMinutes = max(0, windowMinutes - remainingMinutes)
+        return bucket.usedPercentage - (elapsedMinutes * 100 / windowMinutes)
     }
 
     private nonisolated static func formattedReset(_ date: Date, now: Date = Date()) -> String {

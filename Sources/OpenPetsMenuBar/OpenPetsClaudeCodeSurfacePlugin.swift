@@ -489,15 +489,15 @@ final class OpenPetsClaudeCodeSurfacePlugin {
         now: Date
     ) -> String {
         guard let delta = paceDelta(for: window, now: now) else {
-            return "Unknown"
+            return "Pace unknown"
         }
         if delta > 0 {
-            return "Over by \(delta)%"
+            return "\(delta)% over target"
         }
         if delta < 0 {
-            return "Headroom \(abs(delta))%"
+            return "\(abs(delta))% under target"
         }
-        return "On pace"
+        return "On track"
     }
 
     private nonisolated static func paceDelta(
