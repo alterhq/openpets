@@ -114,8 +114,13 @@ jobs:
           ! otool -L "$APP_PATH/Contents/MacOS/openpets-cli" | grep -q "Sparkle.framework"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$APP_PATH/Contents/Info.plist")" = "AppIcon"
           test -f "$APP_PATH/Contents/Resources/AppIcon.icns"
-          test -f "$APP_PATH/Contents/Resources/OpenPets_OpenPetsCore.bundle/pet.json"
-          test -f "$APP_PATH/Contents/Resources/OpenPets_OpenPetsCore.bundle/spritesheet.webp"
+          test -f "$APP_PATH/OpenPetsKit_OpenPetsKit.bundle/pet.json"
+          test -f "$APP_PATH/OpenPetsKit_OpenPetsKit.bundle/spritesheet.webp"
+          test -f "$APP_PATH/OpenPets_OpenPetsMenuBar.bundle/codex.png"
+          test -f "$APP_PATH/OpenPets_OpenPetsMenuBar.bundle/claude.png"
+          test -f "$APP_PATH/OpenPets_OpenPetsMenuBar.bundle/pi.png"
+          test -f "$APP_PATH/OpenPets_OpenPetsMenuBar.bundle/opencode.png"
+          test -f "$APP_PATH/OpenPets_OpenPetsMenuBar.bundle/zed.png"
 
       - name: Verify signatures and notarization
         run: |
@@ -147,6 +152,7 @@ jobs:
         with:
           tag_name: ${{ env.OPENPETS_RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
+          body_path: .build/sparkle-updates/OpenPets-${{ env.OPENPETS_VERSION }}.md
           files: |
             .build/release-artifacts/OpenPets-${{ env.OPENPETS_VERSION }}.dmg
             .build/release-artifacts/OpenPets-${{ env.OPENPETS_VERSION }}.dmg.sha256
