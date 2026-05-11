@@ -44,7 +44,7 @@ OpenPets ships first-party plugins as built-in app features while the external p
 Current official plugins:
 
 - Battery: shows macOS battery percentage, plugged/unplugged state, time remaining or time to full when available, a Battery Settings action, and low-battery or charging pet reactions.
-- Claude Code: reads OpenPets' own quota cache written by `openpets claude-statusline` and shows separate `5h` and `7d` quota clouds with reset time and pace details. If Claude Code is configured but quota data is missing, OpenPets shows a muted setup cloud that links to setup docs.
+- Claude Code: shows separate `5h` and `7d` quota clouds with reset time and pace details. If Claude Code is configured but usage data is missing, OpenPets shows a muted setup cloud that links to setup docs.
 - Codex Usage: reads Codex usage from ChatGPT's local auth token, then shows separate usage clouds for available rate-limit windows.
 
 Plugin support is currently built-in and pull-request based. External plugin install, separate plugin repositories, sandboxed subprocess execution, and plugin update UX are planned but not shipped yet.
@@ -306,12 +306,6 @@ Check connectivity:
 
 ```sh
 openpets ping
-```
-
-Use OpenPets as the Claude Code statusline bridge for quota clouds:
-
-```sh
-openpets claude-statusline
 ```
 
 Clear one message bubble or stop the pet process:

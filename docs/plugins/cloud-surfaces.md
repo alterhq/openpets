@@ -92,7 +92,7 @@ hotspot.belowTrailing
 
 The cloud gradient is extracted from the currently selected pet sprite at startup and reused until the pet changes. Hidden hotspots appear as tiny color-matched glows. Nearby hotspots reveal the full cloud with white icon and value.
 
-Multi-metric plugins should emit one surface per metric. The built-in Claude Code plugin reads OpenPets' own quota cache written by `openpets claude-statusline` and emits separate `claude.5h` and `claude.7d` cloud surfaces, with reset times and pace in click details. The built-in Codex Usage plugin reads `~/.codex/auth.json` for the ChatGPT Codex usage API, then emits separate Codex usage clouds for each available rate-limit window.
+Multi-metric plugins should emit one surface per metric. The built-in Claude Code plugin reads Claude Code OAuth credentials and polls Anthropic's usage endpoint for separate `claude.5h` and `claude.7d` cloud surfaces, with reset times and pace in click details. The built-in Codex Usage plugin reads `~/.codex/auth.json` for the ChatGPT Codex usage API, then emits separate Codex usage clouds for each available rate-limit window.
 
 Plugins can also emit separate `pet.reaction` updates with semantic states such as `low-energy`, `charging`, `alert`, `celebrate`, `working`, and `resting`. Pet reactions remain independent from cloud surfaces.
 

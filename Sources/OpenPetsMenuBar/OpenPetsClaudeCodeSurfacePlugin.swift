@@ -1,27 +1,117 @@
 import Foundation
 import OpenPetsKit
 
+struct OpenPetsClaudeCodeOAuthCredentials: Equatable, Sendable {
+    var accessToken: String
+    var expiresAt: Date?
+}
+
+private enum OpenPetsClaudeCodeUsageFetchResult: Sendable {
+    case snapshot(OpenPetsClaudeCodeQuotaSnapshot)
+    case unauthorized
+    case failed
+}
+
 struct OpenPetsClaudeCodeQuotaReader: Sendable {
-    var cacheFileURL: URL?
+    typealias DataLoader = @Sendable (URLRequest) async throws -> (Data, URLResponse)
+
+    var credentialsURL: URL
     var claudeConfigurationURLs: [URL]
+    var usageURL: URL
+    var processRunner: OpenPetsProcessRunning
+    var shellURL: URL
+    var environment: [String: String]
+    var userAgent: String
+    var dataLoader: DataLoader
 
     init(
-        cacheFileURL: URL? = nil,
-        claudeConfigurationURLs: [URL] = Self.defaultClaudeConfigurationURLs()
+        claudeHomeURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude", isDirectory: true),
+        claudeConfigurationURLs: [URL] = Self.defaultClaudeConfigurationURLs(),
+        usageURL: URL = URL(string: "https://api.anthropic.com/api/oauth/usage")!,
+        processRunner: OpenPetsProcessRunning = OpenPetsDefaultProcessRunner(),
+        shellURL: URL = URL(fileURLWithPath: "/bin/zsh"),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        userAgent: String = "claude-code/1.0.0",
+        dataLoader: @escaping DataLoader = { request in
+            try await URLSession.shared.data(for: request)
+        }
     ) {
-        self.cacheFileURL = cacheFileURL
+        self.credentialsURL = claudeHomeURL.appendingPathComponent(".credentials.json")
         self.claudeConfigurationURLs = claudeConfigurationURLs
+        self.usageURL = usageURL
+        self.processRunner = processRunner
+        self.shellURL = shellURL
+        self.environment = environment
+        self.userAgent = userAgent
+        self.dataLoader = dataLoader
     }
 
-    func snapshot(now: Date = Date()) -> OpenPetsClaudeCodeQuotaSnapshot? {
-        OpenPetsClaudeCodeQuotaCache.load(
-            from: cacheFileURL ?? OpenPetsClaudeCodeQuotaCache.defaultCacheFileURL,
-            now: now
-        )
+    init(
+        credentialsURL: URL,
+        claudeConfigurationURLs: [URL]? = nil,
+        usageURL: URL = URL(string: "https://api.anthropic.com/api/oauth/usage")!,
+        processRunner: OpenPetsProcessRunning = OpenPetsDefaultProcessRunner(),
+        shellURL: URL = URL(fileURLWithPath: "/bin/zsh"),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        userAgent: String = "claude-code/1.0.0",
+        dataLoader: @escaping DataLoader = { request in
+            try await URLSession.shared.data(for: request)
+        }
+    ) {
+        self.credentialsURL = credentialsURL
+        self.claudeConfigurationURLs = claudeConfigurationURLs ?? [
+            credentialsURL,
+            credentialsURL.deletingLastPathComponent()
+        ]
+        self.usageURL = usageURL
+        self.processRunner = processRunner
+        self.shellURL = shellURL
+        self.environment = environment
+        self.userAgent = userAgent
+        self.dataLoader = dataLoader
+    }
+
+    func snapshot(now: Date = Date()) async -> OpenPetsClaudeCodeQuotaSnapshot? {
+        guard var credentials = credentials(now: now) else { return nil }
+        if credentials.isExpired(now: now) {
+            refreshClaudeCodeCredentials()
+            guard
+                let refreshedCredentials = self.credentials(now: now),
+                !refreshedCredentials.isExpired(now: now)
+            else {
+                return nil
+            }
+            credentials = refreshedCredentials
+        }
+
+        switch await liveUsageSnapshot(accessToken: credentials.accessToken, now: now) {
+        case let .snapshot(snapshot):
+            return snapshot
+        case .failed:
+            return nil
+        case .unauthorized:
+            break
+        }
+
+        refreshClaudeCodeCredentials()
+        guard
+            let refreshedCredentials = self.credentials(now: Date()),
+            refreshedCredentials.accessToken != credentials.accessToken || credentials.isExpired(now: Date())
+        else {
+            return nil
+        }
+        if case let .snapshot(snapshot) = await liveUsageSnapshot(accessToken: refreshedCredentials.accessToken, now: Date()) {
+            return snapshot
+        }
+        return nil
     }
 
     func hasClaudeConfiguration(fileManager: FileManager = .default) -> Bool {
-        claudeConfigurationURLs.contains { fileManager.fileExists(atPath: $0.path) }
+        if environment["CLAUDE_CODE_OAUTH_TOKEN"]?.isEmpty == false {
+            return true
+        }
+        return claudeConfigurationURLs.contains { fileManager.fileExists(atPath: $0.path) }
     }
 
     static func defaultClaudeConfigurationURLs(
@@ -31,6 +121,192 @@ struct OpenPetsClaudeCodeQuotaReader: Sendable {
             homeDirectoryURL.appendingPathComponent(".claude", isDirectory: true),
             homeDirectoryURL.appendingPathComponent(".claude.json")
         ]
+    }
+
+    static func snapshot(
+        fromOAuthUsageData data: Data,
+        now: Date = Date()
+    ) -> OpenPetsClaudeCodeQuotaSnapshot? {
+        guard
+            let payload = jsonObject(from: data),
+            let fiveHour = payload["five_hour"] as? [String: Any],
+            let sevenDay = payload["seven_day"] as? [String: Any],
+            let fiveHourUsed = percentage(fiveHour["utilization"]),
+            let sevenDayUsed = percentage(sevenDay["utilization"]),
+            let fiveHourResetDate = resetDate(fiveHour["resets_at"]),
+            let sevenDayResetDate = resetDate(sevenDay["resets_at"]),
+            fiveHourResetDate > now,
+            sevenDayResetDate > now
+        else {
+            return nil
+        }
+
+        return OpenPetsClaudeCodeQuotaSnapshot(
+            fiveHour: OpenPetsClaudeCodeQuotaWindow(
+                label: "5h",
+                usedPercentage: fiveHourUsed,
+                resetDate: fiveHourResetDate,
+                durationMinutes: 5 * 60
+            ),
+            sevenDay: OpenPetsClaudeCodeQuotaWindow(
+                label: "7d",
+                usedPercentage: sevenDayUsed,
+                resetDate: sevenDayResetDate,
+                durationMinutes: 7 * 24 * 60
+            )
+        )
+    }
+
+    func credentials(now: Date = Date()) -> OpenPetsClaudeCodeOAuthCredentials? {
+        if let credentials = keychainCredentials() {
+            return credentials
+        }
+        if let credentials = fileCredentials(from: credentialsURL) {
+            return credentials
+        }
+        if let token = environment["CLAUDE_CODE_OAUTH_TOKEN"], !token.isEmpty {
+            return OpenPetsClaudeCodeOAuthCredentials(accessToken: token, expiresAt: nil)
+        }
+        return nil
+    }
+
+    private func liveUsageSnapshot(accessToken: String, now: Date) async -> OpenPetsClaudeCodeUsageFetchResult {
+        var request = URLRequest(url: usageURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 6
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        guard let (data, response) = try? await dataLoader(request),
+              let httpResponse = response as? HTTPURLResponse
+        else {
+            return .failed
+        }
+
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            return httpResponse.statusCode == 401 ? .unauthorized : .failed
+        }
+
+        guard let snapshot = Self.snapshot(fromOAuthUsageData: data, now: now) else {
+            return .failed
+        }
+        return .snapshot(snapshot)
+    }
+
+    private func keychainCredentials() -> OpenPetsClaudeCodeOAuthCredentials? {
+        guard
+            let result = try? processRunner.run(
+                executableURL: URL(fileURLWithPath: "/usr/bin/security"),
+                arguments: ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
+            ),
+            result.succeeded,
+            let data = result.standardOutput.data(using: .utf8)
+        else {
+            return nil
+        }
+        return Self.credentials(from: data)
+    }
+
+    private func fileCredentials(from url: URL) -> OpenPetsClaudeCodeOAuthCredentials? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return Self.credentials(from: data)
+    }
+
+    private static func credentials(from data: Data) -> OpenPetsClaudeCodeOAuthCredentials? {
+        guard
+            let payload = jsonObject(from: data),
+            let oauth = payload["claudeAiOauth"] as? [String: Any],
+            let accessToken = oauth["accessToken"] as? String,
+            !accessToken.isEmpty
+        else {
+            return nil
+        }
+        let expiresAt = number(oauth["expiresAt"])
+            .map { Date(timeIntervalSince1970: $0 / 1000) }
+        return OpenPetsClaudeCodeOAuthCredentials(accessToken: accessToken, expiresAt: expiresAt)
+    }
+
+    private func refreshClaudeCodeCredentials() {
+        guard
+            let claudePathResult = runProcess(
+                executableURL: shellURL,
+                arguments: ["-lc", "command -v claude"],
+                timeout: 3
+            ),
+            claudePathResult.succeeded,
+            let claudePath = claudePathResult.standardOutput
+                .split(whereSeparator: \.isNewline)
+                .first
+                .map(String.init),
+            !claudePath.isEmpty
+        else {
+            return
+        }
+
+        let claudeURL = URL(fileURLWithPath: claudePath)
+        if runProcess(executableURL: claudeURL, arguments: ["update"], timeout: 15)?.succeeded == true {
+            return
+        }
+        _ = runProcess(executableURL: claudeURL, arguments: ["auth", "status"], timeout: 10)
+    }
+
+    private func runProcess(executableURL: URL, arguments: [String], timeout: TimeInterval) -> OpenPetsProcessResult? {
+        if let defaultRunner = processRunner as? OpenPetsDefaultProcessRunner {
+            return try? defaultRunner.run(executableURL: executableURL, arguments: arguments, timeout: timeout)
+        }
+        return try? processRunner.run(executableURL: executableURL, arguments: arguments)
+    }
+
+    private static func jsonObject(from data: Data) -> [String: Any]? {
+        try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private static func percentage(_ value: Any?) -> Int? {
+        guard let value = number(value) else { return nil }
+        let percentage = Int(value.rounded(.down))
+        guard (0...100).contains(percentage) else { return nil }
+        return percentage
+    }
+
+    private static func resetDate(_ value: Any?) -> Date? {
+        switch value {
+        case let string as String:
+            if let date = ISO8601DateFormatter().date(from: string) {
+                return date
+            }
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return formatter.date(from: string)
+        case let int as Int:
+            return Date(timeIntervalSince1970: TimeInterval(int))
+        case let double as Double:
+            return Date(timeIntervalSince1970: double)
+        default:
+            return nil
+        }
+    }
+
+    private static func number(_ value: Any?) -> Double? {
+        switch value {
+        case let value as Double:
+            value
+        case let value as Int:
+            Double(value)
+        case let value as String:
+            Double(value)
+        default:
+            nil
+        }
+    }
+}
+
+private extension OpenPetsClaudeCodeOAuthCredentials {
+    func isExpired(now: Date) -> Bool {
+        guard let expiresAt else { return false }
+        return expiresAt.timeIntervalSince(now) <= 60
     }
 }
 
@@ -43,7 +319,7 @@ final class OpenPetsClaudeCodeSurfacePlugin {
     private var updateHandler: (([OpenPetsSurfaceUpdate], [OpenPetsPetReactionUpdate]) -> Void)?
     private var task: Task<Void, Never>?
 
-    init(reader: OpenPetsClaudeCodeQuotaReader = OpenPetsClaudeCodeQuotaReader(), refreshInterval: Duration = .seconds(30)) {
+    init(reader: OpenPetsClaudeCodeQuotaReader = OpenPetsClaudeCodeQuotaReader(), refreshInterval: Duration = .seconds(180)) {
         self.reader = reader
         self.refreshInterval = refreshInterval
     }
@@ -51,14 +327,16 @@ final class OpenPetsClaudeCodeSurfacePlugin {
     func start(updateHandler: @escaping ([OpenPetsSurfaceUpdate], [OpenPetsPetReactionUpdate]) -> Void) {
         self.updateHandler = updateHandler
         guard task == nil else {
-            refresh()
+            Task { [weak self] in
+                await self?.refresh()
+            }
             return
         }
 
         task = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                refresh()
+                await refresh()
                 do {
                     try await ContinuousClock().sleep(for: refreshInterval)
                 } catch {
@@ -75,9 +353,9 @@ final class OpenPetsClaudeCodeSurfacePlugin {
         updateHandler = nil
     }
 
-    func refresh() {
+    func refresh() async {
         let now = Date()
-        let snapshot = reader.snapshot()
+        let snapshot = await reader.snapshot(now: now)
         let surfaceUpdates = if let snapshot {
             Self.surfaceUpdates(for: snapshot, now: now)
         } else if reader.hasClaudeConfiguration() {
@@ -128,7 +406,7 @@ final class OpenPetsClaudeCodeSurfacePlugin {
                 title: "Claude Code",
                 rows: [
                     OpenPetsSurfaceDetailRow(label: "Status", value: "Waiting for quota data"),
-                    OpenPetsSurfaceDetailRow(label: "Setup", value: "Use openpets claude-statusline")
+                    OpenPetsSurfaceDetailRow(label: "Source", value: "Claude Code OAuth")
                 ],
                 actionURL: "https://github.com/alterhq/openpets/blob/main/docs/ai-assistants/claude-code.md",
                 actionLabel: "Docs",

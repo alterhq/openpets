@@ -86,6 +86,10 @@ protocol OpenPetsProcessRunning: Sendable {
 
 struct OpenPetsDefaultProcessRunner: OpenPetsProcessRunning, Sendable {
     func run(executableURL: URL, arguments: [String]) throws -> OpenPetsProcessResult {
+        try run(executableURL: executableURL, arguments: arguments, timeout: nil)
+    }
+
+    func run(executableURL: URL, arguments: [String], timeout: TimeInterval?) throws -> OpenPetsProcessResult {
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
@@ -97,7 +101,23 @@ struct OpenPetsDefaultProcessRunner: OpenPetsProcessRunning, Sendable {
         process.standardError = errorPipe
 
         try process.run()
-        process.waitUntilExit()
+        if let timeout {
+            let deadline = Date().addingTimeInterval(timeout)
+            while process.isRunning, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if process.isRunning {
+                process.terminate()
+                process.waitUntilExit()
+                return OpenPetsProcessResult(
+                    terminationStatus: 124,
+                    standardOutput: "",
+                    standardError: "Timed out after \(timeout)s"
+                )
+            }
+        } else {
+            process.waitUntilExit()
+        }
 
         let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let error = errorPipe.fileHandleForReading.readDataToEndOfFile()

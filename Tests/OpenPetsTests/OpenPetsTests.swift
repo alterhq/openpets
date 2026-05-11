@@ -545,86 +545,185 @@ final class OpenPetsTests: XCTestCase {
         )).isEmpty)
     }
 
-    func testClaudeCodeQuotaCacheParsesStatusLinePayload() throws {
+    func testClaudeCodeQuotaReaderParsesOAuthUsagePayload() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let resetFiveHour = Int(now.addingTimeInterval(90 * 60).timeIntervalSince1970)
-        let resetSevenDay = Int(now.addingTimeInterval(3 * 24 * 60 * 60).timeIntervalSince1970)
+        let sevenDayReset = ISO8601DateFormatter().string(from: now.addingTimeInterval(3 * 24 * 60 * 60))
         let data = Data(
             """
             {
-              "rate_limits": {
-                "five_hour": {
-                  "used_percentage": 42,
-                  "resets_at": \(resetFiveHour)
-                },
-                "seven_day": {
-                  "used_percentage": 18,
-                  "resets_at": \(resetSevenDay)
-                }
+              "five_hour": {
+                "utilization": 42.8,
+                "resets_at": "2027-01-15T09:30:00.528743+00:00"
+              },
+              "seven_day": {
+                "utilization": 18.1,
+                "resets_at": "\(sevenDayReset)"
+              },
+              "seven_day_opus": null,
+              "seven_day_sonnet": null,
+              "extra_usage": {
+                "is_enabled": false
               }
             }
             """.utf8
         )
 
-        let snapshot = try XCTUnwrap(OpenPetsClaudeCodeQuotaCache.snapshot(fromStatusLineJSON: data))
+        let snapshot = try XCTUnwrap(OpenPetsClaudeCodeQuotaReader.snapshot(fromOAuthUsageData: data, now: now))
 
         XCTAssertEqual(snapshot.fiveHour.usedPercentage, 42)
         XCTAssertEqual(snapshot.fiveHour.durationMinutes, 300)
+        XCTAssertEqual(
+            snapshot.fiveHour.resetDate.timeIntervalSince1970,
+            1_800_005_400.528743,
+            accuracy: 0.001
+        )
         XCTAssertEqual(snapshot.sevenDay.usedPercentage, 18)
         XCTAssertEqual(snapshot.sevenDay.durationMinutes, 10_080)
+        XCTAssertEqual(snapshot.sevenDay.resetDate, now.addingTimeInterval(3 * 24 * 60 * 60))
     }
 
-    func testClaudeCodeQuotaReaderLoadsOpenPetsQuotaCache() throws {
+    func testClaudeCodeQuotaReaderLoadsCredentialsFile() throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let cacheURL = directory.appendingPathComponent("claude-code-quota.json")
+        let credentialsURL = directory.appendingPathComponent(".credentials.json")
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let expected = OpenPetsClaudeCodeQuotaSnapshot(
-            fiveHour: OpenPetsClaudeCodeQuotaWindow(
-                label: "5h",
-                usedPercentage: 42,
-                resetDate: now.addingTimeInterval(90 * 60),
-                durationMinutes: 300
-            ),
-            sevenDay: OpenPetsClaudeCodeQuotaWindow(
-                label: "7d",
-                usedPercentage: 18,
-                resetDate: now.addingTimeInterval(3 * 24 * 60 * 60),
-                durationMinutes: 10_080
+        try Data(
+            """
+            {
+              "claudeAiOauth": {
+                "accessToken": "test-access-token",
+                "refreshToken": "test-refresh-token",
+                "expiresAt": \((now.timeIntervalSince1970 + 3600) * 1000)
+              }
+            }
+            """.utf8
+        ).write(to: credentialsURL)
+
+        let credentials = OpenPetsClaudeCodeQuotaReader(
+            credentialsURL: credentialsURL,
+            processRunner: FakeProcessRunner(responses: [:]),
+            environment: [:]
+        ).credentials(now: now)
+
+        XCTAssertEqual(
+            credentials,
+            OpenPetsClaudeCodeOAuthCredentials(
+                accessToken: "test-access-token",
+                expiresAt: now.addingTimeInterval(3600)
             )
         )
-        try OpenPetsClaudeCodeQuotaCache.save(expected, to: cacheURL)
-
-        let snapshot = try XCTUnwrap(OpenPetsClaudeCodeQuotaReader(cacheFileURL: cacheURL).snapshot(now: now))
-
-        XCTAssertEqual(snapshot.fiveHour.usedPercentage, 42)
-        XCTAssertEqual(snapshot.fiveHour.durationMinutes, 300)
-        XCTAssertEqual(snapshot.sevenDay.usedPercentage, 18)
-        XCTAssertEqual(snapshot.sevenDay.durationMinutes, 10_080)
     }
 
-    func testClaudeCodeQuotaReaderRejectsExpiredQuotaCache() throws {
-        let directory = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let cacheURL = directory.appendingPathComponent("claude-code-quota.json")
-        let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let snapshot = OpenPetsClaudeCodeQuotaSnapshot(
-            fiveHour: OpenPetsClaudeCodeQuotaWindow(
-                label: "5h",
-                usedPercentage: 42,
-                resetDate: now.addingTimeInterval(-60),
-                durationMinutes: 300
-            ),
-            sevenDay: OpenPetsClaudeCodeQuotaWindow(
-                label: "7d",
-                usedPercentage: 18,
-                resetDate: now.addingTimeInterval(3 * 24 * 60 * 60),
-                durationMinutes: 10_080
-            )
-        )
-        try OpenPetsClaudeCodeQuotaCache.save(snapshot, to: cacheURL)
+    func testClaudeCodeQuotaReaderUsesEnvironmentOAuthToken() {
+        let credentials = OpenPetsClaudeCodeQuotaReader(
+            credentialsURL: URL(fileURLWithPath: "/tmp/missing-credentials.json"),
+            processRunner: FakeProcessRunner(responses: [:]),
+            environment: ["CLAUDE_CODE_OAUTH_TOKEN": "env-access-token"]
+        ).credentials()
 
-        XCTAssertNil(OpenPetsClaudeCodeQuotaReader(cacheFileURL: cacheURL).snapshot(now: now))
+        XCTAssertEqual(
+            credentials,
+            OpenPetsClaudeCodeOAuthCredentials(accessToken: "env-access-token", expiresAt: nil)
+        )
+    }
+
+    func testClaudeCodeQuotaReaderSendsOAuthUsageHeaders() async throws {
+        let requestRecorder = RequestRecorder()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let fiveHourReset = ISO8601DateFormatter().string(from: now.addingTimeInterval(90 * 60))
+        let sevenDayReset = ISO8601DateFormatter().string(from: now.addingTimeInterval(3 * 24 * 60 * 60))
+        let data = Data(
+            """
+            {
+              "five_hour": {
+                "utilization": 42,
+                "resets_at": "\(fiveHourReset)"
+              },
+              "seven_day": {
+                "utilization": 18,
+                "resets_at": "\(sevenDayReset)"
+              }
+            }
+            """.utf8
+        )
+        let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+
+        _ = await OpenPetsClaudeCodeQuotaReader(
+            credentialsURL: URL(fileURLWithPath: "/tmp/missing-credentials.json"),
+            usageURL: usageURL,
+            processRunner: FakeProcessRunner(responses: [:]),
+            environment: ["CLAUDE_CODE_OAUTH_TOKEN": "env-access-token"],
+            userAgent: "claude-code/1.2.3",
+            dataLoader: { request in
+                requestRecorder.request = request
+                return (data, HTTPURLResponse(
+                    url: usageURL,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!)
+            }
+        ).snapshot(now: now)
+
+        let request = try XCTUnwrap(requestRecorder.request)
+        XCTAssertEqual(request.url, usageURL)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer env-access-token")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-beta"), "oauth-2025-04-20")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "claude-code/1.2.3")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+    }
+
+    func testClaudeCodeQuotaReaderDoesNotRefreshCredentialsOnRateLimit() async {
+        let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+        let runner = FakeProcessRunner(responses: [:])
+
+        let snapshot = await OpenPetsClaudeCodeQuotaReader(
+            credentialsURL: URL(fileURLWithPath: "/tmp/missing-credentials.json"),
+            usageURL: usageURL,
+            processRunner: runner,
+            environment: ["CLAUDE_CODE_OAUTH_TOKEN": "env-access-token"],
+            dataLoader: { _ in
+                (Data(), HTTPURLResponse(
+                    url: usageURL,
+                    statusCode: 429,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!)
+            }
+        ).snapshot()
+
+        XCTAssertNil(snapshot)
+        XCTAssertEqual(runner.recordedInvocations, [
+            FakeProcessRunner.key("/usr/bin/security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+        ])
+    }
+
+    func testClaudeCodeQuotaReaderRefreshesCredentialsOnUnauthorized() async {
+        let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+        let claudeURL = URL(fileURLWithPath: "/tmp/claude")
+        let runner = FakeProcessRunner(responses: [
+            FakeProcessRunner.key("/bin/zsh", ["-lc", "command -v claude"]): .success("\(claudeURL.path)\n"),
+            FakeProcessRunner.key(claudeURL.path, ["update"]): .success("")
+        ])
+
+        let snapshot = await OpenPetsClaudeCodeQuotaReader(
+            credentialsURL: URL(fileURLWithPath: "/tmp/missing-credentials.json"),
+            usageURL: usageURL,
+            processRunner: runner,
+            environment: ["CLAUDE_CODE_OAUTH_TOKEN": "env-access-token"],
+            dataLoader: { _ in
+                (Data(), HTTPURLResponse(
+                    url: usageURL,
+                    statusCode: 401,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!)
+            }
+        ).snapshot()
+
+        XCTAssertNil(snapshot)
+        XCTAssertTrue(runner.recordedInvocations.contains(FakeProcessRunner.key("/bin/zsh", ["-lc", "command -v claude"])))
+        XCTAssertTrue(runner.recordedInvocations.contains(FakeProcessRunner.key(claudeURL.path, ["update"])))
     }
 
     func testClaudeCodeQuotaReaderDetectsClaudeConfiguration() throws {
@@ -634,8 +733,10 @@ final class OpenPetsTests: XCTestCase {
         try FileManager.default.createDirectory(at: claudeDirectory, withIntermediateDirectories: true)
 
         XCTAssertTrue(OpenPetsClaudeCodeQuotaReader(
-            cacheFileURL: nil,
-            claudeConfigurationURLs: [claudeDirectory]
+            credentialsURL: claudeDirectory.appendingPathComponent(".credentials.json"),
+            claudeConfigurationURLs: [claudeDirectory],
+            processRunner: FakeProcessRunner(responses: [:]),
+            environment: [:]
         ).hasClaudeConfiguration())
     }
 
@@ -678,10 +779,10 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertEqual(update.icon, OpenPetsSurfaceIcons.info)
         XCTAssertEqual(update.value, "Claude")
         XCTAssertEqual(update.tone, .muted)
-        XCTAssertEqual(update.detail?.rows.map(\.label), ["Status", "Setup"])
+        XCTAssertEqual(update.detail?.rows.map(\.label), ["Status", "Source"])
         XCTAssertEqual(
-            update.detail?.rows.first { $0.label == "Setup" }?.value,
-            "Use openpets claude-statusline"
+            update.detail?.rows.first { $0.label == "Source" }?.value,
+            "Claude Code OAuth"
         )
     }
 
@@ -2054,6 +2155,10 @@ private final class FakeProcessRunner: OpenPetsProcessRunning, @unchecked Sendab
         recordedInvocations.append(key)
         return responses[key] ?? .failure("missing fake response")
     }
+}
+
+private final class RequestRecorder: @unchecked Sendable {
+    var request: URLRequest?
 }
 
 private extension OpenPetsProcessResult {

@@ -103,15 +103,6 @@ struct OpenPetsCLI {
             }
             try send(.clearMessage(threadId: threadId), socketPath: options.values["socket"] ?? userConfiguration.socketPath)
 
-        case "claude-statusline":
-            let data = FileHandle.standardInput.readDataToEndOfFile()
-            if let snapshot = OpenPetsClaudeCodeQuotaCache.snapshot(fromStatusLineJSON: data) {
-                try OpenPetsClaudeCodeQuotaCache.save(snapshot)
-                print("Claude 5h \(snapshot.fiveHour.usedPercentage)% 7d \(snapshot.sevenDay.usedPercentage)%")
-            } else {
-                print("Claude")
-            }
-
         case "stop-animation":
             let userConfiguration = try OpenPetsConfiguration.loadOrCreateDefault()
             let options = parseOptions(Array(arguments.dropFirst()))
@@ -158,7 +149,6 @@ struct OpenPetsCLI {
               openpets notify --title TITLE --status KIND [--text TEXT] [--thread UUID] [--url URL] [--button LABEL] [--ttl SECONDS] [--socket PATH]
               openpets animate ANIMATION [--loop|--once] [--ttl SECONDS] [--socket PATH]
               openpets clear --thread UUID [--socket PATH]
-              openpets claude-statusline
               openpets stop-animation [--socket PATH]
               openpets ping [--socket PATH]
               openpets stop [--socket PATH]

@@ -4,15 +4,13 @@ Claude Code needs two things to use OpenPets well:
 
 - the OpenPets MCP server configured for the session
 - OpenPets behavior guidance in a Claude instruction file
-- the OpenPets statusline bridge if you want Claude Code quota clouds
 
 ## Setup
 
 1. Configure the OpenPets MCP server in the matching MCP config file below.
 2. Copy the shared OpenPets snippet from [README.md](./README.md#shared-openpets-snippet).
 3. Paste it into the matching `CLAUDE.md` instruction file below.
-4. Optional: configure the OpenPets statusline bridge so the Claude Code plugin can show quota clouds.
-5. Start a new session if the current session does not pick up changed instructions automatically.
+4. Start a new session if the current session does not pick up changed instructions automatically.
 
 ## MCP Config
 
@@ -43,20 +41,9 @@ The OpenPets snippet belongs in a `CLAUDE.md` instruction file, not in the MCP c
 
 ## Quota Cloud Plugin
 
-Claude Code exposes rate-limit usage to [statusline commands](https://code.claude.com/docs/en/statusline). OpenPets uses that statusline JSON to maintain its own local quota cache for the built-in Claude Code cloud plugin.
+The built-in Claude Code cloud plugin reads Claude Code OAuth credentials and polls Anthropic's usage endpoint for authoritative `5h` and `7d` quota data. OpenPets looks for credentials in macOS Keychain item `Claude Code-credentials`, `~/.claude/.credentials.json`, or `CLAUDE_CODE_OAUTH_TOKEN`.
 
-Install the OpenPets CLI from the menu bar app, then add this to `~/.claude/settings.json`:
-
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "openpets claude-statusline"
-  }
-}
-```
-
-The command prints a compact terminal status line for Claude Code and writes quota data to OpenPets' config directory. The desktop pet reads that cache and renders the `5h` and `7d` clouds. No third-party statusline plugin is required.
+When a token is expired, OpenPets tries to refresh Claude Code credentials by running `claude update`, then `claude auth status` as a fallback. The plugin polls at a conservative interval to avoid OAuth usage API rate limits.
 
 ## Notes
 
