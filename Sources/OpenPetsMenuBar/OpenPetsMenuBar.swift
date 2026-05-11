@@ -1288,6 +1288,8 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         if slot == .hotspotBottomTrailing { return "Bottom Trailing" }
         if slot == .hotspotBottomLeading { return "Bottom Leading" }
         if slot == .hotspotLeft { return "Left" }
+        if slot == .hotspotBelowLeading { return "Below Leading" }
+        if slot == .hotspotBelowTrailing { return "Below Trailing" }
         return slot.rawValue
     }
 

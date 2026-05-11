@@ -158,7 +158,16 @@ final class OpenPetsTests: XCTestCase {
             let moveMenu = try XCTUnwrap(moveItem.submenu)
             XCTAssertEqual(
                 moveMenu.items.map(\.title),
-                ["Top Trailing", "Top Leading", "Right", "Bottom Trailing", "Bottom Leading", "Left"]
+                [
+                    "Top Trailing",
+                    "Top Leading",
+                    "Right",
+                    "Bottom Trailing",
+                    "Bottom Leading",
+                    "Left",
+                    "Below Leading",
+                    "Below Trailing"
+                ]
             )
             XCTAssertEqual(moveMenu.items.first { $0.title == "Top Trailing" }?.state, .on)
             XCTAssertEqual(moveMenu.items.first { $0.title == "Right" }?.state, .off)
@@ -171,6 +180,12 @@ final class OpenPetsTests: XCTestCase {
             let disableItem = try XCTUnwrap(menu.items.first { $0.title == "Disable Battery" })
             XCTAssertEqual(disableItem.representedObject as? String, OpenPetsBatterySurfacePlugin.pluginID)
             XCTAssertNotNil(disableItem.action)
+
+            let belowMenu = try XCTUnwrap(controller.makeSurfaceContextMenu(for: OpenPetsResolvedSurface(
+                update: update,
+                placement: .placed(.hotspotBelowLeading)
+            )))
+            XCTAssertEqual(belowMenu.items.first?.title, "Position: Below Leading")
         }
     }
 

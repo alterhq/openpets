@@ -84,6 +84,8 @@ hotspot.right
 hotspot.bottomTrailing
 hotspot.bottomLeading
 hotspot.left
+hotspot.belowLeading
+hotspot.belowTrailing
 ```
 
 ## Rendering
