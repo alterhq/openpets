@@ -366,7 +366,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
 
     func preloadInstalledPets() {
         reloadConfiguration()
-        let library = OpenPetsPetLibrary()
+        let library = OpenPetsMenuBarPetLibrary()
         let pets = library.listPets().sorted { lhs, rhs in
             if lhs.id == configuration.activePetID { return true }
             if rhs.id == configuration.activePetID { return false }
@@ -1089,7 +1089,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
         }
 
         reloadConfiguration()
-        let petDirectoryURL = OpenPetsPetLibrary().activePetURL(for: configuration)
+        let petDirectoryURL = OpenPetsMenuBarPetLibrary().activePetURL(for: configuration)
         let hostConfiguration = OpenPetsHostConfiguration(
             petDirectoryURL: petDirectoryURL,
             socketPath: configuration.socketPath,
@@ -1114,7 +1114,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
 
     private func switchActivePet() async throws {
         reloadConfiguration()
-        let petDirectoryURL = OpenPetsPetLibrary().activePetURL(for: configuration)
+        let petDirectoryURL = OpenPetsMenuBarPetLibrary().activePetURL(for: configuration)
         let display = configuration.display(forPetID: configuration.activePetID)
         if let petSession {
             try await petSession.switchPet(to: petDirectoryURL, display: display)
@@ -1306,7 +1306,7 @@ final class OpenPetsMenuBarController: NSObject, NSMenuDelegate {
 
     private func refreshPetMenu(_ activePetItem: NSMenuItem) {
         let menu = NSMenu()
-        let pets = OpenPetsPetLibrary().listPets()
+        let pets = OpenPetsMenuBarPetLibrary().listPets()
         for pet in pets {
             let item = NSMenuItem(title: pet.displayName, action: #selector(selectPet(_:)), keyEquivalent: "")
             item.target = self

@@ -40,6 +40,117 @@ final class OpenPetsTests: XCTestCase {
         XCTAssertTrue(script.contains("OpenPets_OpenPetsMenuBar.bundle/zed.png"))
     }
 
+    func testAgentLogoLookupFindsPackagedAppResourceBundleWithoutBundleModule() throws {
+        let rootURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceLogoURL = rootURL.appendingPathComponent("Sources/OpenPetsMenuBar/Resources/AgentLogos/codex.png")
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let appURL = temporaryURL.appendingPathComponent("OpenPets.app", isDirectory: true)
+        let contentsURL = appURL.appendingPathComponent("Contents", isDirectory: true)
+        let resourcesURL = contentsURL.appendingPathComponent("Resources", isDirectory: true)
+        let executableDirectoryURL = contentsURL.appendingPathComponent("MacOS", isDirectory: true)
+        let logoBundleURL = resourcesURL.appendingPathComponent("OpenPets_OpenPetsMenuBar.bundle", isDirectory: true)
+        let packagedLogoURL = logoBundleURL.appendingPathComponent("codex.png")
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+
+        try FileManager.default.createDirectory(at: logoBundleURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: executableDirectoryURL, withIntermediateDirectories: true)
+        try Data().write(to: executableDirectoryURL.appendingPathComponent("OpenPets"))
+        try FileManager.default.copyItem(at: sourceLogoURL, to: packagedLogoURL)
+        let plist: NSDictionary = [
+            "CFBundleExecutable": "OpenPets",
+            "CFBundleIdentifier": "sh.openpets.test",
+            "CFBundlePackageType": "APPL"
+        ]
+        XCTAssertTrue(plist.write(to: contentsURL.appendingPathComponent("Info.plist"), atomically: true))
+
+        let appBundle = try XCTUnwrap(Bundle(url: appURL))
+        let url = try XCTUnwrap(OpenPetsAgentLogoResources.logoURL(resourceName: "codex", bundle: appBundle))
+
+        XCTAssertEqual(url.standardizedFileURL, packagedLogoURL.standardizedFileURL)
+    }
+
+    func testAgentLogoLookupIncludesAppResourceBundleLocation() {
+        let urls = OpenPetsAgentLogoResources.resourceBundleURLs()
+
+        XCTAssertTrue(
+            urls.contains { url in
+                url.path.hasSuffix("Contents/Resources/OpenPets_OpenPetsMenuBar.bundle")
+            }
+        )
+    }
+
+    func testAgentLogoLoaderDoesNotUseGeneratedBundleModuleAccessor() throws {
+        let rootURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sourceURL = rootURL.appendingPathComponent("Sources/OpenPetsMenuBar/OpenPetsAgentOnboardingWindow.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+
+        XCTAssertFalse(source.contains("Bundle.module"))
+    }
+
+    func testMenuBarPetLibraryFindsBundledStarcornWithoutBundleModule() {
+        let url = OpenPetsMenuBarPetLibrary().bundledStarcornURL()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.appendingPathComponent("pet.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.appendingPathComponent("spritesheet.webp").path))
+    }
+
+    func testMenuBarPetLibraryFindsPackagedAppBundledStarcornWithoutBundleModule() throws {
+        let sourceStarcornURL = OpenPetsMenuBarPetLibrary().bundledStarcornURL()
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let appURL = temporaryURL.appendingPathComponent("OpenPets.app", isDirectory: true)
+        let contentsURL = appURL.appendingPathComponent("Contents", isDirectory: true)
+        let resourcesURL = contentsURL.appendingPathComponent("Resources", isDirectory: true)
+        let executableDirectoryURL = contentsURL.appendingPathComponent("MacOS", isDirectory: true)
+        let petBundleURL = resourcesURL.appendingPathComponent("OpenPetsKit_OpenPetsKit.bundle", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+
+        try FileManager.default.createDirectory(at: petBundleURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: executableDirectoryURL, withIntermediateDirectories: true)
+        try Data().write(to: executableDirectoryURL.appendingPathComponent("OpenPets"))
+        try FileManager.default.copyItem(
+            at: sourceStarcornURL.appendingPathComponent("pet.json"),
+            to: petBundleURL.appendingPathComponent("pet.json")
+        )
+        try FileManager.default.copyItem(
+            at: sourceStarcornURL.appendingPathComponent("spritesheet.webp"),
+            to: petBundleURL.appendingPathComponent("spritesheet.webp")
+        )
+        let plist: NSDictionary = [
+            "CFBundleExecutable": "OpenPets",
+            "CFBundleIdentifier": "sh.openpets.test",
+            "CFBundlePackageType": "APPL"
+        ]
+        XCTAssertTrue(plist.write(to: contentsURL.appendingPathComponent("Info.plist"), atomically: true))
+
+        let appBundle = try XCTUnwrap(Bundle(url: appURL))
+        let resolvedURL = OpenPetsMenuBarPetLibrary(bundle: appBundle).bundledStarcornURL()
+
+        XCTAssertEqual(resolvedURL.standardizedFileURL, petBundleURL.standardizedFileURL)
+    }
+
+    func testMenuBarPetLibraryDoesNotUseGeneratedBundleModuleAccessor() throws {
+        let rootURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let librarySourceURL = rootURL.appendingPathComponent("Sources/OpenPetsMenuBar/OpenPetsMenuBarPetLibrary.swift")
+        let menuBarSourceURL = rootURL.appendingPathComponent("Sources/OpenPetsMenuBar/OpenPetsMenuBar.swift")
+
+        let librarySource = try String(contentsOf: librarySourceURL, encoding: .utf8)
+        let menuBarSource = try String(contentsOf: menuBarSourceURL, encoding: .utf8)
+
+        XCTAssertFalse(librarySource.contains("Bundle.module"))
+        XCTAssertFalse(menuBarSource.contains("OpenPetsPetLibrary()"))
+    }
+
     @MainActor
     func testPetContextMenuMatchesStatusMenuTopLevelItems() {
         let controller = OpenPetsMenuBarController()

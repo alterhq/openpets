@@ -790,10 +790,8 @@ private enum OpenPetsAgentLogo {
     }
 
     private static func bundledLogo(for kind: OpenPetsAgentKind) -> NSImage? {
-        guard let url = Bundle.module.url(
-            forResource: kind.logoResourceName,
-            withExtension: "png"
-        ), let image = NSImage(contentsOf: url) else {
+        guard let url = OpenPetsAgentLogoResources.logoURL(resourceName: kind.logoResourceName),
+              let image = NSImage(contentsOf: url) else {
             return nil
         }
         image.size = CGSize(width: 28, height: 28)
@@ -833,6 +831,65 @@ private enum OpenPetsAgentLogo {
         kind.logoText.draw(in: textRect, withAttributes: attributes)
         image.unlockFocus()
         return image
+    }
+}
+
+enum OpenPetsAgentLogoResources {
+    private static let bundleName = "OpenPets_OpenPetsMenuBar.bundle"
+
+    static func logoURL(
+        resourceName: String,
+        bundle: Bundle = .main,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        for bundleURL in resourceBundleURLs(bundle: bundle) {
+            if let resourceBundle = Bundle(url: bundleURL),
+               let url = resourceBundle.url(forResource: resourceName, withExtension: "png") {
+                return url
+            }
+
+            let url = bundleURL.appendingPathComponent("\(resourceName).png", isDirectory: false)
+            if fileManager.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+
+        for logoDirectoryURL in sourceLogoDirectoryURLs() {
+            let url = logoDirectoryURL.appendingPathComponent("\(resourceName).png", isDirectory: false)
+            if fileManager.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+
+        return nil
+    }
+
+    static func resourceBundleURLs(bundle: Bundle = .main) -> [URL] {
+        var urls: [URL] = []
+
+        if let resourceURL = bundle.resourceURL {
+            urls.append(resourceURL.appendingPathComponent(bundleName, isDirectory: true))
+        }
+        urls.append(bundle.bundleURL.appendingPathComponent(bundleName, isDirectory: true))
+        urls.append(bundle.bundleURL.appendingPathComponent("Contents/Resources/\(bundleName)", isDirectory: true))
+        if let executableURL = bundle.executableURL {
+            urls.append(executableURL.deletingLastPathComponent().appendingPathComponent(bundleName, isDirectory: true))
+        }
+
+        var seenPaths: Set<String> = []
+        return urls.filter { url in
+            let path = url.standardizedFileURL.path
+            return seenPaths.insert(path).inserted
+        }
+    }
+
+    private static func sourceLogoDirectoryURLs() -> [URL] {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+        return [
+            sourceURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources/AgentLogos", isDirectory: true)
+        ]
     }
 }
 
