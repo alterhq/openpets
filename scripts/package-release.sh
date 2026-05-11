@@ -211,16 +211,16 @@ for resource_bundle in OpenPetsKit_OpenPetsKit.bundle OpenPets_OpenPetsMenuBar.b
     echo "Missing SwiftPM resource bundle: $resource_bundle" >&2
     exit 1
   fi
-  cp -R "$ARM64_RELEASE_DIR/$resource_bundle" "$APP_BUNDLE/"
+  cp -R "$ARM64_RELEASE_DIR/$resource_bundle" "$APP_BUNDLE/Contents/Resources/"
 done
 test -f "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
-test -f "$APP_BUNDLE/OpenPetsKit_OpenPetsKit.bundle/pet.json"
-test -f "$APP_BUNDLE/OpenPetsKit_OpenPetsKit.bundle/spritesheet.webp"
-test -f "$APP_BUNDLE/OpenPets_OpenPetsMenuBar.bundle/codex.png"
-test -f "$APP_BUNDLE/OpenPets_OpenPetsMenuBar.bundle/claude.png"
-test -f "$APP_BUNDLE/OpenPets_OpenPetsMenuBar.bundle/pi.png"
-test -f "$APP_BUNDLE/OpenPets_OpenPetsMenuBar.bundle/opencode.png"
-test -f "$APP_BUNDLE/OpenPets_OpenPetsMenuBar.bundle/zed.png"
+test -f "$APP_BUNDLE/Contents/Resources/OpenPetsKit_OpenPetsKit.bundle/pet.json"
+test -f "$APP_BUNDLE/Contents/Resources/OpenPetsKit_OpenPetsKit.bundle/spritesheet.webp"
+test -f "$APP_BUNDLE/Contents/Resources/OpenPets_OpenPetsMenuBar.bundle/codex.png"
+test -f "$APP_BUNDLE/Contents/Resources/OpenPets_OpenPetsMenuBar.bundle/claude.png"
+test -f "$APP_BUNDLE/Contents/Resources/OpenPets_OpenPetsMenuBar.bundle/pi.png"
+test -f "$APP_BUNDLE/Contents/Resources/OpenPets_OpenPetsMenuBar.bundle/opencode.png"
+test -f "$APP_BUNDLE/Contents/Resources/OpenPets_OpenPetsMenuBar.bundle/zed.png"
 
 if [[ -n "$IDENTITY" ]]; then
   SPARKLE_FRAMEWORK="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"

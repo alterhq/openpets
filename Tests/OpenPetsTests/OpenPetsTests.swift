@@ -30,9 +30,9 @@ final class OpenPetsTests: XCTestCase {
         let script = try String(contentsOf: scriptURL, encoding: .utf8)
 
         XCTAssertTrue(script.contains("OpenPetsKit_OpenPetsKit.bundle"))
-        XCTAssertTrue(script.contains("$APP_BUNDLE/OpenPetsKit_OpenPetsKit.bundle/pet.json"))
+        XCTAssertTrue(script.contains("$APP_BUNDLE/Contents/Resources/OpenPetsKit_OpenPetsKit.bundle/pet.json"))
         XCTAssertTrue(script.contains("OpenPets_OpenPetsMenuBar.bundle"))
-        XCTAssertTrue(script.contains("$APP_BUNDLE/OpenPets_OpenPetsMenuBar.bundle/codex.png"))
+        XCTAssertTrue(script.contains("$APP_BUNDLE/Contents/Resources/OpenPets_OpenPetsMenuBar.bundle/codex.png"))
         XCTAssertTrue(script.contains("OpenPets_OpenPetsMenuBar.bundle/codex.png"))
         XCTAssertTrue(script.contains("OpenPets_OpenPetsMenuBar.bundle/claude.png"))
         XCTAssertTrue(script.contains("OpenPets_OpenPetsMenuBar.bundle/pi.png"))
