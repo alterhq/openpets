@@ -1,5 +1,5 @@
 {
-  "originHash" : "4d4fbf7b67e63e4eebc6323ba2a9652e020e71105cbb18781954cb3e1a929fc0",
+  "originHash" : "9db3fa619858fd96bc2be99f91cc9bc2415df78b46fdd156a6f15365f8efa55a",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/alterhq/OpenPetsKit.git",
       "state" : {
-        "revision" : "589874307800fae41783332b3df3e2269430f690",
-        "version" : "0.2.0"
+        "revision" : "83497ed34d1831dd453130af77552bfecaef264b",
+        "version" : "0.2.1"
       }
     },
     {
