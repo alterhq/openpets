@@ -2,6 +2,11 @@
 
 OpenPets is a native macOS desktop pet for visible agent progress, review prompts, completion states, and lightweight animations across local coding tools.
 
+An experimental, separate **Linux GTK3 host** is available in [`Linux/`](./Linux/).
+See [Linux setup and limitations](./docs/linux-port.md) for its bundled pet,
+optional MCP server, notification actions and opt-in plugins. It is not yet full
+macOS feature parity. The macOS build is unchanged.
+
 It gives Codex Pets a shared home outside one assistant. The menu bar app, MCP server, CLI, and apps built with [OpenPetsKit](https://github.com/alterhq/OpenPetsKit) can all talk to the same local pet, so Codex, Claude Code, Cursor, OpenCode, Pi CLI, generic MCP clients, local apps, and scripts can report work through one visible desktop companion.
 
 https://github.com/user-attachments/assets/a12fc67e-c82c-488c-9480-e51826995c75
