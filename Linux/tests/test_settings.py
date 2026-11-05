@@ -106,6 +106,7 @@ class ReadTests(unittest.TestCase):
     def test_read_missing_returns_defaults_and_writes_nothing(self):
         config = self.settings.read()
         self.assertEqual(config, DEFAULT_CONFIG)
+        self.assertTrue(config["linuxMCPEnabled"])
         self.assertFalse(self.settings.path.exists())
 
     def test_read_invalid_json_returns_defaults_without_overwriting(self):
@@ -198,6 +199,96 @@ class UpdateTests(unittest.TestCase):
         # last socketPath wins but display.scale must be preserved.
         self.assertEqual(config["display"]["scale"], 0.5)
         self.assertIsInstance(config["socketPath"], str)
+
+
+class DisplayOpacityTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.mkdtemp(prefix="openpets-opacity-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.temporary, ignore_errors=True))
+        self._env = _EnvRestore()
+        self._env.__enter__()
+        self.addCleanup(self._env.__exit__, None, None, None)
+        os.environ["XDG_CONFIG_HOME"] = str(Path(self.temporary) / "config")
+        os.environ["HOME"] = self.temporary
+        self.settings = Settings()
+
+    def test_fractional_opacity_persists_and_round_trips(self):
+        self.settings.update({"display": {"pluginOpacity": 0.37, "messageOpacity": 0.05}})
+        config = self.settings.read()
+        self.assertEqual(config["display"]["pluginOpacity"], 0.37)
+        self.assertEqual(config["display"]["messageOpacity"], 0.05)
+
+    def test_opacity_extremes_persist(self):
+        self.settings.update({"display": {"pluginOpacity": 0.0, "messageOpacity": 1.0}})
+        config = self.settings.read()
+        self.assertEqual(config["display"]["pluginOpacity"], 0.0)
+        self.assertEqual(config["display"]["messageOpacity"], 1.0)
+        # Unrelated display fields are preserved by the merge.
+        self.assertEqual(config["display"]["scale"], DEFAULT_CONFIG["display"]["scale"])
+
+    def test_update_merges_opacity_with_unrelated_display_fields(self):
+        self.settings.update({"display": {"scale": 1.5}})
+        self.settings.update({"display": {"messageOpacity": 0.25}})
+        config = self.settings.read()
+        self.assertEqual(config["display"]["scale"], 1.5)
+        self.assertEqual(config["display"]["messageOpacity"], 0.25)
+        self.assertEqual(config["display"]["pluginOpacity"], DEFAULT_CONFIG["display"]["pluginOpacity"])
+
+
+class PluginSideTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.mkdtemp(prefix="openpets-side-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.temporary, ignore_errors=True))
+        self._env = _EnvRestore()
+        self._env.__enter__()
+        self.addCleanup(self._env.__exit__, None, None, None)
+        os.environ["XDG_CONFIG_HOME"] = str(Path(self.temporary) / "config")
+        os.environ["HOME"] = self.temporary
+        self.settings = Settings()
+
+    def test_plugin_side_defaults_to_right(self):
+        config = self.settings.read()
+        self.assertEqual(config["display"]["pluginSide"], "right")
+
+    def test_plugin_side_persists_left_and_right(self):
+        for side in ("left", "right"):
+            self.settings.update({"display": {"pluginSide": side}})
+            config = self.settings.read()
+            self.assertEqual(config["display"]["pluginSide"], side)
+            # Unrelated display fields preserved.
+            self.assertEqual(config["display"]["scale"], DEFAULT_CONFIG["display"]["scale"])
+
+
+class CollapsedMessagePreviewSecondsTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.mkdtemp(prefix="openpets-preview-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.temporary, ignore_errors=True))
+        self._env = _EnvRestore()
+        self._env.__enter__()
+        self.addCleanup(self._env.__exit__, None, None, None)
+        os.environ["XDG_CONFIG_HOME"] = str(Path(self.temporary) / "config")
+        os.environ["HOME"] = self.temporary
+        self.settings = Settings()
+
+    def test_collapsed_message_preview_seconds_defaults_to_five(self):
+        config = self.settings.read()
+        self.assertEqual(config["display"]["collapsedMessagePreviewSeconds"], 5)
+
+    def test_collapsed_message_preview_seconds_persists_in_range(self):
+        for seconds in (1, 5, 30, 60):
+            self.settings.update({"display": {"collapsedMessagePreviewSeconds": seconds}})
+            config = self.settings.read()
+            self.assertEqual(config["display"]["collapsedMessagePreviewSeconds"], seconds)
+            # Unrelated display fields preserved.
+            self.assertEqual(config["display"]["scale"], DEFAULT_CONFIG["display"]["scale"])
+            self.assertEqual(config["display"]["pluginSide"], DEFAULT_CONFIG["display"]["pluginSide"])
+
+    def test_collapsed_message_preview_seconds_out_of_range_is_stored_as_written(self):
+        # Settings is a dumb store: clamping happens at the UI/apply layer.
+        self.settings.update({"display": {"collapsedMessagePreviewSeconds": 0}})
+        self.assertEqual(self.settings.read()["display"]["collapsedMessagePreviewSeconds"], 0)
+        self.settings.update({"display": {"collapsedMessagePreviewSeconds": 999}})
+        self.assertEqual(self.settings.read()["display"]["collapsedMessagePreviewSeconds"], 999)
 
 
 class PositionTests(unittest.TestCase):

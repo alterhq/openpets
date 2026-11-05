@@ -1,8 +1,10 @@
 # Linux MCP and OpenCode V2
 
-The optional MCP service uses the official Python SDK (`mcp==1.26.0`, tested),
-not a hand-written JSON-RPC implementation. GTK/CLI do not import the SDK or
-start an HTTP server unless requested. No OpenCode files are edited automatically.
+The MCP service uses the official Python SDK (`mcp==1.26.0`, tested), not a
+hand-written JSON-RPC implementation. The GUI starts its loopback service by
+default; the tray/right-click checkbox controls and persists that preference.
+The CLI does not start an HTTP server unless requested. No OpenCode files are
+edited automatically.
 
 ## Install the optional SDK
 
@@ -36,11 +38,36 @@ are configurable. Non-loopback bind hosts are refused; SDK Host/Origin checks
 are retained. Same-user local clients can call this unauthenticated local service.
 Do not proxy it to an untrusted network.
 
-Alternatively enable **MCP server (loopback)** in the pet's tray/right-click
+**MCP server (loopback)** is enabled by default in the pet's tray/right-click
 menu. This starts an owned child service and saves `linuxMCPEnabled`; closing
 the GUI stops only that owned process, not another independently started server.
 Host/port/endpoint use `mcpHost`, `mcpPort`, `mcpEndpoint` from OpenPets config.
 The checkbox reports an exited child rather than claiming a working listener.
+
+### Troubleshoot “MCP port … is already in use”
+
+The message means another process currently owns the configured TCP port; OpenPets
+does not kill or take over another listener. Find the process (replace `3001` with
+the port shown in the error):
+
+```sh
+ss -ltnp 'sport = :3001'
+ps -fp PID
+```
+
+Use the PID reported by `ss` in place of `PID`. Check the command before stopping
+anything. If it is a standalone `openpets mcp`, stop it with `Ctrl+C` in its
+terminal. If it belongs to another application, stop that application normally.
+If it is a leftover OpenPets MCP child, send it `TERM` only after confirming its
+command and PID (`kill -TERM PID`); do not use `kill -9` as the first step. Then
+enable the MCP checkbox again.
+
+Alternatively, change `mcpPort` in the OpenPets settings file (normally
+`~/.config/openpets/config.json`, or `$XDG_CONFIG_HOME/openpets/config.json` when
+`XDG_CONFIG_HOME` is set) to an unused port, for example `3002`. Preserve the
+other settings in that JSON file. Update clients to use the same port; for
+OpenCode, print the matching config with `openpets opencode-config --port 3002`.
+The service remains loopback-only.
 
 Nine tools: `get_openpets_status`, `wake_pet`, `stop_pet`, `notify`,
 `play_pet_animation`, `stop_pet_animation`, `clear_pet_message`, `ping_pet`,

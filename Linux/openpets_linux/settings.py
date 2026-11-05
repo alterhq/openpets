@@ -40,9 +40,20 @@ POSITIONS_FILE = "positions.json"
 DEFAULT_CONFIG: dict[str, Any] = {
     "socketPath": f"/tmp/openpets-{os.getuid()}.sock",
     "motionMode": MODE_OFF,
+    "linuxMCPEnabled": True,
     "display": {
         "scale": 0.42,
         "messageAreaHeight": 56,
+        "themeMode": "dark",
+        "pluginOpacity": 0.94,
+        "messageOpacity": 0.94,
+        "blurBackground": False,
+        "borderRadius": 14.0,
+        "messagesCollapsed": False,
+        "messageBubbleWidth": 240,
+        "messageFontSize": 10.0,
+        "pluginSide": "right",
+        "collapsedMessagePreviewSeconds": 5,
     },
 }
 
