@@ -43,6 +43,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "display": {
         "scale": 0.42,
         "messageAreaHeight": 56,
+        "messageBubbleWidth": 240,
+        "messageFontSize": 10.0,
     },
 }
 

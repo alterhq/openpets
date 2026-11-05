@@ -406,13 +406,16 @@ def load_config(path: str | None = None) -> dict[str, Any]:
     Missing or unreadable config falls back to defaults:
 
         socketPath /tmp/openpets-{UID}.sock
-        display {scale: 0.42, messageAreaHeight: 56}
+        display {scale: 0.42, messageAreaHeight: 56,
+                 messageBubbleWidth: 240, messageFontSize: 10}
     """
     result: dict[str, Any] = {
         "socketPath": default_socket_path(),
         "display": {
             "scale": DEFAULT_SCALE,
             "messageAreaHeight": DEFAULT_MESSAGE_AREA_HEIGHT,
+            "messageBubbleWidth": 240,
+            "messageFontSize": 10.0,
         },
     }
 
@@ -454,5 +457,11 @@ def load_config(path: str | None = None) -> dict[str, Any]:
         message_area_height = display.get("messageAreaHeight")
         if _is_finite_number(message_area_height):
             result["display"]["messageAreaHeight"] = message_area_height
+        message_bubble_width = display.get("messageBubbleWidth")
+        if _is_finite_number(message_bubble_width) and 120 <= message_bubble_width <= 600:
+            result["display"]["messageBubbleWidth"] = int(message_bubble_width)
+        message_font_size = display.get("messageFontSize")
+        if _is_finite_number(message_font_size) and 6 <= message_font_size <= 24:
+            result["display"]["messageFontSize"] = float(message_font_size)
 
     return result

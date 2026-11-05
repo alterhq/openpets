@@ -14,6 +14,29 @@ HAS_DISPLAY = bool(os.environ.get("DISPLAY")) and importlib.util.find_spec("gi")
 
 @unittest.skipUnless(HAS_DISPLAY, "GTK tests require DISPLAY (use Xvfb)")
 class GUIFeatures(unittest.TestCase):
+    def test_display_settings_apply_and_persist(self):
+        from openpets_linux.library import bundled_starcorn_path
+        from openpets_linux.ui import PetWindow
+
+        with tempfile.TemporaryDirectory(prefix="openpets-display-settings-") as directory:
+            environment = {"HOME": directory, "XDG_CONFIG_HOME": directory + "/config",
+                           "XDG_DATA_HOME": directory + "/data",
+                           "DBUS_SESSION_BUS_ADDRESS": ""}
+            with patch.dict(os.environ, environment):
+                window = PetWindow(bundled_starcorn_path(), .42, directory + "/host.sock")
+                try:
+                    window.start()
+                    window.apply_display_settings(.6, 360, 14)
+                    display = window.settings.read()["display"]
+                    self.assertEqual(display["scale"], .6)
+                    self.assertEqual(display["messageBubbleWidth"], 360)
+                    self.assertEqual(display["messageFontSize"], 14)
+                    self.assertEqual(window.message_bubble_width, 360)
+                    self.assertEqual(window.layout.message_font_size, 14)
+                    self.assertGreater(window.cell_width, 80)
+                finally:
+                    window.cleanup()
+
     def test_plugin_refresh_now_only_refreshes_enabled_providers(self):
         import gi
         gi.require_version("Gtk", "3.0")
