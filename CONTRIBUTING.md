@@ -89,7 +89,7 @@ When changing MCP behavior, verify the relevant tool schema and descriptions in 
 
 ## Pet Assets
 
-Pet bundles must include a `pet.json` manifest and a spritesheet with an 8x9 atlas layout. Keep contributed assets original or clearly licensed for redistribution.
+Pet bundles must include a `pet.json` manifest and a spritesheet matching its `spriteVersionNumber` (v1: 8x9; v2: 8x11). Keep contributed assets original or clearly licensed for redistribution.
 
 If you add or modify bundled assets, include provenance and licensing details in the pull request.
 

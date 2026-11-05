@@ -182,6 +182,7 @@ class OverlayLayout(NamedTuple):
     width: int
     cell_width: int
     cell_height: int
+    message_font_size: float
     pet_x: int
     pet_top: int
     header_height: int        # vertical space above the pet sprite
@@ -206,6 +207,8 @@ def compute_layout(
     cell_height: int,
     surfaces: tuple = (),
     messages: tuple = (),
+    message_max_width: int = MESSAGE_MAX_WIDTH,
+    message_font_size: float = MESSAGE_TITLE_SIZE,
 ) -> OverlayLayout:
     """Compute compact overlay geometry for one frame.
 
@@ -217,6 +220,19 @@ def compute_layout(
     width = int(width)
     cell_width = int(cell_width)
     cell_height = int(cell_height)
+    if isinstance(message_max_width, bool) or not isinstance(message_max_width, (int, float)):
+        message_max_width = MESSAGE_MAX_WIDTH
+    message_max_width = max(120, min(600, int(message_max_width)))
+    try:
+        font_size_is_finite = math.isfinite(message_font_size)
+    except (TypeError, OverflowError):
+        font_size_is_finite = False
+    if isinstance(message_font_size, bool) or not isinstance(message_font_size, (int, float)) or not font_size_is_finite:
+        message_font_size = MESSAGE_TITLE_SIZE
+    message_font_size = max(6.0, min(24.0, float(message_font_size)))
+    message_body_font_size = max(5.0, message_font_size - 1.0)
+    title_line_height = int(math.ceil(message_font_size * 1.45))
+    text_line_height = int(math.ceil(message_body_font_size * 1.45))
     surfaces = list(surfaces)
     messages = list(messages)
 
@@ -257,16 +273,16 @@ def compute_layout(
     # --- message thread band (below the pet) ----------------------------
     message_rects: list[MessageRect] = []
     band_top = pet_top + cell_height + PET_BOTTOM_GAP
-    bubble_w = min(MESSAGE_MAX_WIDTH, max(0, width - 2 * MESSAGE_PAD_X))
+    bubble_w = min(message_max_width, max(0, width - 2 * MESSAGE_PAD_X))
     bubble_x = (width - bubble_w) // 2
     y = band_top
     for index, message in enumerate(messages):
         thread_id = message.get("threadId") or ""
         has_text = bool(message.get("text"))
         lines = 2 if has_text else 1
-        bubble_h = 2 * MESSAGE_PAD_Y + TITLE_LINE_HEIGHT
+        bubble_h = 2 * MESSAGE_PAD_Y + title_line_height
         if has_text:
-            bubble_h += MESSAGE_LINE_GAP + TEXT_LINE_HEIGHT
+            bubble_h += MESSAGE_LINE_GAP + text_line_height
         rect = cairo.RectangleInt(bubble_x, y, bubble_w, bubble_h)
         message_rects.append(
             MessageRect(index, str(thread_id), rect, lines, message)
@@ -297,6 +313,7 @@ def compute_layout(
         width=width,
         cell_width=cell_width,
         cell_height=cell_height,
+        message_font_size=message_font_size,
         pet_x=pet_x,
         pet_top=pet_top,
         header_height=pet_top,
@@ -436,7 +453,7 @@ def draw_message_threads(context: cairo.Context, layout: OverlayLayout) -> None:
         context.fill()
         inner_w = r.width - 2 * MESSAGE_PAD_X - 12
         title = msg.message.get("title", "")
-        title_layout = _text_layout(context, title, MESSAGE_TITLE_SIZE, inner_w)
+        title_layout = _text_layout(context, title, layout.message_font_size, inner_w)
         _, title_h = title_layout.get_size()
         title_h = title_h / Pango.SCALE
         context.set_source_rgb(*TEXT_PRIMARY)
@@ -444,7 +461,7 @@ def draw_message_threads(context: cairo.Context, layout: OverlayLayout) -> None:
         PangoCairo.show_layout(context, title_layout)
         text = msg.message.get("text")
         if text:
-            text_layout = _text_layout(context, text, MESSAGE_TEXT_SIZE, inner_w)
+            text_layout = _text_layout(context, text, max(5.0, layout.message_font_size - 1.0), inner_w)
             context.set_source_rgba(
                 1, 1, 1, TEXT_SECONDARY_ALPHA
             )

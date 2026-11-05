@@ -37,8 +37,9 @@ __all__ = [
 
 # Per-frame durations (ms), based on OpenPetsKit PetAnimation.swift, shortened
 # for responsive Linux gestures. Idle retains rests, without multi-second freezes.
-# The final entry of each tuple is the hold/settle frame. The atlas is an 8x9
-# grid: columns are frames, rows are the ANIMATIONS order in core.py.
+# The final entry of each tuple is the hold/settle frame. Version 1 atlases are
+# 8x9; version 2 atlases are 8x11 and keep these nine animation rows first,
+# followed by two look-direction rows not currently played by this host.
 ANIMATION_DURATIONS: dict[str, Tuple[int, ...]] = {
     "idle": (600, 180, 180, 180, 180, 900),
     "running-right": (80,) * 7 + (140,),
