@@ -71,9 +71,22 @@ class FeatureSafety(unittest.TestCase):
             listener.bind(("127.0.0.1", 0))
             listener.listen(1)
             owned = MCPProcess()
-            with self.assertRaises(RuntimeError):
-                owned.start("/unused.sock", {"mcpPort": listener.getsockname()[1]})
+            port = listener.getsockname()[1]
+            with self.assertRaisesRegex(RuntimeError, rf"port {port} on 127\.0\.0\.1 is already in use") as caught:
+                owned.start("/unused.sock", {"mcpPort": port})
             self.assertIsNone(owned.process)
+            self.assertIn(f"ss -ltnp 'sport = :{port}'", str(caught.exception))
+            self.assertIn("update the MCP client URL", str(caught.exception))
+
+    def test_gui_mcp_does_not_misreport_other_bind_errors_as_port_conflicts(self):
+        from openpets_linux.mcp_runtime import MCPProcess
+        with patch("openpets_linux.mcp_runtime.socket.socket") as make_socket:
+            probe = make_socket.return_value.__enter__.return_value
+            probe.bind.side_effect = OSError(13, "Permission denied")
+            with self.assertRaisesRegex(RuntimeError, "Cannot check MCP port 3001") as caught:
+                MCPProcess().start("/unused.sock", {})
+        self.assertNotIn("already in use", str(caught.exception))
+        self.assertIn("Permission denied", str(caught.exception))
 
     def test_opencode_v2_shape(self):
         config = opencode_configuration("/unused.sock")

@@ -42,6 +42,31 @@ the GUI stops only that owned process, not another independently started server.
 Host/port/endpoint use `mcpHost`, `mcpPort`, `mcpEndpoint` from OpenPets config.
 The checkbox reports an exited child rather than claiming a working listener.
 
+### Troubleshoot “MCP port … is already in use”
+
+The message means another process currently owns the configured TCP port; OpenPets
+does not kill or take over another listener. Find the process (replace `3001` with
+the port shown in the error):
+
+```sh
+ss -ltnp 'sport = :3001'
+ps -fp PID
+```
+
+Use the PID reported by `ss` in place of `PID`. Check the command before stopping
+anything. If it is a standalone `openpets mcp`, stop it with `Ctrl+C` in its
+terminal. If it belongs to another application, stop that application normally.
+If it is a leftover OpenPets MCP child, send it `TERM` only after confirming its
+command and PID (`kill -TERM PID`); do not use `kill -9` as the first step. Then
+enable the MCP checkbox again.
+
+Alternatively, change `mcpPort` in the OpenPets settings file (normally
+`~/.config/openpets/config.json`, or `$XDG_CONFIG_HOME/openpets/config.json` when
+`XDG_CONFIG_HOME` is set) to an unused port, for example `3002`. Preserve the
+other settings in that JSON file. Update clients to use the same port; for
+OpenCode, print the matching config with `openpets opencode-config --port 3002`.
+The service remains loopback-only.
+
 Nine tools: `get_openpets_status`, `wake_pet`, `stop_pet`, `notify`,
 `play_pet_animation`, `stop_pet_animation`, `clear_pet_message`, `ping_pet`,
 `list_pet_animations`. `notify` returns a `threadId`; reuse it for updates. Optional `url` and
