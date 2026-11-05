@@ -102,6 +102,19 @@ class PetWindow(Gtk.Window):
         self.listener = None
         self.socket_identity = None
         self.message_rows = []
+        display_settings = self.settings.read().get("display", {})
+        if not isinstance(display_settings, dict):
+            display_settings = {}
+        self.appearance = {
+            "themeMode": display_settings.get("themeMode", "dark"),
+            "pluginOpacity": display_settings.get("pluginOpacity", 0.94),
+            "messageOpacity": display_settings.get("messageOpacity", 0.94),
+            "blurBackground": display_settings.get("blurBackground", False),
+            "borderRadius": display_settings.get("borderRadius", 14.0),
+            "messagesCollapsed": display_settings.get("messagesCollapsed", False),
+        }
+        self.unread_message_count = 0
+        self._known_message_ids = set()
         self.set_title("OpenPets Linux")
         self.set_decorated(False)
         self.set_resizable(False)
@@ -169,7 +182,8 @@ class PetWindow(Gtk.Window):
         self.indicator = None
         from .plugin_ui import PluginController
         self.plugins = PluginController(self, self.settings, lambda: self.refresh())
-        for label, callback in (("Choose pet…", self.open_chooser),
+        for label, callback in (("Appearance settings…", self.open_appearance_settings),
+                                ("Choose pet…", self.open_chooser),
                                 ("Display settings…", self.open_display_settings),
                                 ("OpenCode setup…", self.open_onboarding),
                                 ("Messages / actions…", self.open_notifications)):
@@ -374,6 +388,112 @@ class PetWindow(Gtk.Window):
         except (OSError, ValueError, RuntimeError) as error:
             self.plugins.show_error(str(error))
 
+    def open_appearance_settings(self):
+        dialog = Gtk.Dialog(title="Overlay appearance", transient_for=self,
+                            flags=Gtk.DialogFlags.MODAL)
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Apply", Gtk.ResponseType.OK)
+        grid = Gtk.Grid(column_spacing=12, row_spacing=10, margin=16)
+        dialog.get_content_area().add(grid)
+        theme = Gtk.ComboBoxText()
+        theme.append("dark", "Dark (black backgrounds)")
+        theme.append("light", "Light (white backgrounds)")
+        theme.set_active_id(self.appearance["themeMode"] if self.appearance["themeMode"] in ("dark", "light") else "dark")
+        grid.attach(Gtk.Label(label="Theme", xalign=0), 0, 0, 1, 1)
+        grid.attach(theme, 1, 0, 1, 1)
+        controls = []
+        for row, (label, key, low, high, step, value) in enumerate((
+            ("Plugin background opacity", "pluginOpacity", 0.1, 1.0, 0.05, self.appearance["pluginOpacity"]),
+            ("Message background opacity", "messageOpacity", 0.1, 1.0, 0.05, self.appearance["messageOpacity"]),
+            ("Border radius", "borderRadius", 0, 32, 1, self.appearance["borderRadius"]),
+        ), start=1):
+            scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, low, high, step)
+            scale.set_digits(2 if "Opacity" in label else 0)
+            try:
+                scale.set_value(float(value))
+            except (TypeError, ValueError):
+                scale.set_value(high)
+            scale.set_hexpand(True)
+            grid.attach(Gtk.Label(label=label, xalign=0), 0, row, 1, 1)
+            grid.attach(scale, 1, row, 1, 1)
+            controls.append((key, scale))
+        blur = Gtk.CheckButton(label="Request compositor background blur")
+        blur.set_active(self.appearance["blurBackground"] is True)
+        grid.attach(blur, 0, 4, 2, 1)
+        blur_note = Gtk.Label(
+            label="Blur requires an X11 compositor configured for ARGB-window blur (for example Picom with blur-background). OpenPets cannot enable compositor blur by itself.",
+            xalign=0, wrap=True,
+        )
+        grid.attach(blur_note, 0, 5, 2, 1)
+        dialog.show_all()
+        response = dialog.run()
+        values = {key: scale.get_value() for key, scale in controls}
+        values["themeMode"] = theme.get_active_id() or "dark"
+        values["blurBackground"] = blur.get_active()
+        dialog.destroy()
+        if response == Gtk.ResponseType.OK:
+            self.apply_appearance_settings(values)
+
+    def apply_appearance_settings(self, values):
+        theme = values.get("themeMode", self.appearance["themeMode"])
+        if theme not in ("dark", "light"):
+            theme = "dark"
+        def bounded(key, default, low, high):
+            value = values.get(key, default)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return default
+            try:
+                if not math.isfinite(value):
+                    return default
+            except OverflowError:
+                return default
+            return max(low, min(high, float(value)))
+        updated = {
+            "themeMode": theme,
+            "pluginOpacity": bounded("pluginOpacity", .94, .1, 1),
+            "messageOpacity": bounded("messageOpacity", .94, .1, 1),
+            "blurBackground": values.get("blurBackground") is True,
+            "borderRadius": bounded("borderRadius", 14, 0, 32),
+        }
+        try:
+            self.settings.update({"display": updated})
+        except (OSError, ValueError) as error:
+            self.plugins.show_error(f"Could not save appearance settings: {error}")
+            return
+        self.appearance.update(updated)
+        self.relayout()
+        self.update_input_shape()
+        self.queue_draw()
+        if updated["blurBackground"]:
+            if not self.composited:
+                self.plugins.show_error(
+                    "Background blur unavailable: no compositor is active. Install and configure a compositor such as Picom with blur-background enabled!"
+                )
+            else:
+                self.plugins.show_error(
+                    "Background blur requested. Configure your compositor (for example Picom blur-background); compositor settings determine whether blur is actually applied!"
+                )
+
+    def toggle_messages_collapsed(self, collapsed):
+        collapsed = bool(collapsed and self.message_rows)
+        if self.appearance.get("messagesCollapsed") == collapsed:
+            return
+        self.appearance["messagesCollapsed"] = collapsed
+        if collapsed:
+            self.unread_message_count = len(self.message_rows)
+        else:
+            self.unread_message_count = 0
+            self._known_message_ids = {str(message.get("threadId", "")) for message in self.message_rows}
+        try:
+            self.settings.update({"display": {"messagesCollapsed": collapsed}})
+        except (OSError, ValueError) as error:
+            self.appearance["messagesCollapsed"] = not collapsed
+            self.plugins.show_error(f"Could not save message display preference: {error}")
+            return
+        self.relayout()
+        self.update_input_shape()
+        self.queue_draw()
+
     def dismiss_message(self, thread_id):
         self.state.apply({"type": "clearMessage", "threadId": thread_id})
         self.refresh()
@@ -480,6 +600,14 @@ class PetWindow(Gtk.Window):
                 self.cycles_remaining = None
             self.schedule_frame()
         self.message_rows = list(self.state.messages.values())[-3:]
+        current_ids = {str(message.get("threadId", "")) for message in self.message_rows}
+        if self.appearance.get("messagesCollapsed"):
+            self.unread_message_count = min(
+                999, self.unread_message_count + len(current_ids - self._known_message_ids)
+            )
+        self._known_message_ids = current_ids
+        if not self.message_rows:
+            self.unread_message_count = 0
         self.relayout()
         self.history.sync(self.state.messages)
         if self.notification_center is not None and not self.notification_center.closed:
@@ -502,7 +630,14 @@ class PetWindow(Gtk.Window):
         previous_pet_x = self.layout.pet_x
         self.layout = compute_layout(self.width, self.cell_width, self.cell_height,
                                      self.plugins.surfaces(), self.message_rows,
-                                     self.message_bubble_width, self.message_font_size)
+                                     theme_mode=self.appearance["themeMode"],
+                                     plugin_opacity=self.appearance["pluginOpacity"],
+                                     message_opacity=self.appearance["messageOpacity"],
+                                     border_radius=self.appearance["borderRadius"],
+                                     messages_collapsed=self.appearance["messagesCollapsed"],
+                                     unread_count=self.unread_message_count,
+                                     message_max_width=self.message_bubble_width,
+                                     message_font_size=self.message_font_size)
         if self.height != self.layout.total_height or previous_width != self.width:
             x, y = self.get_position()
             # Preserve sprite screen anchor when content changes above/below
@@ -566,6 +701,10 @@ class PetWindow(Gtk.Window):
             hit = hit_test(self.layout, event.x, event.y)
             if hit is not None and hit.kind == "chip":
                 self.plugins.show_details()
+            elif hit is not None and hit.kind == "message-expand":
+                self.toggle_messages_collapsed(False)
+            elif hit is not None and hit.kind == "message-collapse":
+                self.toggle_messages_collapsed(True)
             elif hit is not None and hit.kind == "message":
                 self.open_notifications()
             elif hit is not None and hit.kind == "pet":

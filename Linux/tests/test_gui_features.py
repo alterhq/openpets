@@ -14,11 +14,13 @@ HAS_DISPLAY = bool(os.environ.get("DISPLAY")) and importlib.util.find_spec("gi")
 
 @unittest.skipUnless(HAS_DISPLAY, "GTK tests require DISPLAY (use Xvfb)")
 class GUIFeatures(unittest.TestCase):
-    def test_display_settings_apply_and_persist(self):
+    def test_appearance_and_message_collapse_persist(self):
         from openpets_linux.library import bundled_starcorn_path
         from openpets_linux.ui import PetWindow
 
-        with tempfile.TemporaryDirectory(prefix="openpets-display-settings-") as directory:
+        with tempfile.TemporaryDirectory(prefix="openpets-appearance-") as directory:
+            # The adjacent pet-size controls are part of the independent
+            # display feature already merged into main.
             environment = {"HOME": directory, "XDG_CONFIG_HOME": directory + "/config",
                            "XDG_DATA_HOME": directory + "/data",
                            "DBUS_SESSION_BUS_ADDRESS": ""}
@@ -26,6 +28,27 @@ class GUIFeatures(unittest.TestCase):
                 window = PetWindow(bundled_starcorn_path(), .42, directory + "/host.sock")
                 try:
                     window.start()
+                    window.apply_appearance_settings({
+                        "themeMode": "light", "pluginOpacity": .6,
+                        "messageOpacity": .7, "borderRadius": 20,
+                        "blurBackground": False,
+                    })
+                    window.state.apply({"type": "notify", "notification": {
+                        "title": "Build", "status": "running"}})
+                    window.refresh()
+                    window.toggle_messages_collapsed(True)
+                    self.assertEqual(window.layout.theme_mode, "light")
+                    self.assertEqual(window.layout.plugin_opacity, .6)
+                    self.assertEqual(window.layout.message_opacity, .7)
+                    self.assertEqual(window.layout.border_radius, 20)
+                    self.assertIsNotNone(window.layout.collapsed_bubble_rect)
+                    self.assertEqual(window.layout.unread_count, 1)
+                    saved = window.settings.read()["display"]
+                    self.assertEqual(saved["themeMode"], "light")
+                    self.assertTrue(saved["messagesCollapsed"])
+                    window.toggle_messages_collapsed(False)
+                    self.assertIsNotNone(window.layout.message_toggle_rect)
+                    self.assertEqual(window.unread_message_count, 0)
                     window.apply_display_settings(.6, 360, 14)
                     display = window.settings.read()["display"]
                     self.assertEqual(display["scale"], .6)

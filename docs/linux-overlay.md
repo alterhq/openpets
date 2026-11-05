@@ -21,6 +21,16 @@ helpers. No Gtk/Gdk widget state, no event wiring, no display server needed
 for import. Tested headlessly with in-memory `cairo.ImageSurface` surfaces
 in `Linux/tests/test_overlay.py`.
 
+Appearance is persisted in `display.themeMode`, `pluginOpacity`,
+`messageOpacity`, and `borderRadius`. Dark and light change overlay surfaces
+between black and white; opacity is applied independently to plugin and message
+backgrounds. Rounded rectangles use a smooth cubic continuous-corner
+approximation. The expanded thread stack has a collapse chevron; collapsed
+threads become one compact bubble with an unread badge and expand on click.
+Background blur remains compositor-owned: the GTK window is ARGB/transparent,
+but the host cannot determine whether Picom (or another compositor) has blur
+rules active.
+
 ## Palette
 
 Minimal neutral, readable colors (alpha composited):

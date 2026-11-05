@@ -68,6 +68,8 @@ __all__ = [
     "BUBBLE_RADIUS",
     "MESSAGE_TITLE_SIZE",
     "MESSAGE_TEXT_SIZE",
+    "COLLAPSED_BUBBLE_WIDTH",
+    "COLLAPSED_BUBBLE_HEIGHT",
     "TITLE_LINE_HEIGHT",
     "TEXT_LINE_HEIGHT",
     # Geometry types
@@ -83,6 +85,7 @@ __all__ = [
     "rounded_rect",
     "draw_plugin_chips",
     "draw_message_threads",
+    "draw_message_controls",
     "draw_overlay",
 ]
 
@@ -133,6 +136,9 @@ BUBBLE_RADIUS = 9         # bubble corner radius
 
 MESSAGE_TITLE_SIZE = 10.0
 MESSAGE_TEXT_SIZE = 9.0
+COLLAPSED_BUBBLE_WIDTH = 56
+COLLAPSED_BUBBLE_HEIGHT = 36
+MESSAGE_TOGGLE_SIZE = 26
 
 # Conservative Pango line-height estimates (points * 1.45, rounded up) used by
 # the layout so ellipsized text always fits inside its computed bubble.
@@ -170,7 +176,7 @@ class MessageRect(NamedTuple):
 class Hit(NamedTuple):
     """Result of hit testing a point against the overlay geometry."""
 
-    kind: str          # "chip" | "message" | "pet" | None
+    kind: str          # "chip" | "message" | "pet" | message controls
     index: int | None
     thread_id: str | None
     surface: dict | None
@@ -194,6 +200,13 @@ class OverlayLayout(NamedTuple):
     chip_band_rect: cairo.RectangleInt | None   # input-shape band above pet
     message_band_rect: cairo.RectangleInt | None  # input-shape band below pet
     pet_rect: cairo.RectangleInt                 # pet sprite (always present)
+    theme_mode: str
+    plugin_opacity: float
+    message_opacity: float
+    border_radius: float
+    unread_count: int
+    collapsed_bubble_rect: cairo.RectangleInt | None
+    message_toggle_rect: cairo.RectangleInt | None
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +222,12 @@ def compute_layout(
     messages: tuple = (),
     message_max_width: int = MESSAGE_MAX_WIDTH,
     message_font_size: float = MESSAGE_TITLE_SIZE,
+    theme_mode: str = "dark",
+    plugin_opacity: float = CHIP_ALPHA,
+    message_opacity: float = BUBBLE_ALPHA,
+    border_radius: float = 14.0,
+    messages_collapsed: bool = False,
+    unread_count: int = 0,
 ) -> OverlayLayout:
     """Compute compact overlay geometry for one frame.
 
@@ -220,6 +239,20 @@ def compute_layout(
     width = int(width)
     cell_width = int(cell_width)
     cell_height = int(cell_height)
+    theme_mode = theme_mode if theme_mode in ("dark", "light") else "dark"
+    plugin_opacity = _bounded_opacity(plugin_opacity, CHIP_ALPHA)
+    message_opacity = _bounded_opacity(message_opacity, BUBBLE_ALPHA)
+    if isinstance(border_radius, bool) or not isinstance(border_radius, (int, float)):
+        border_radius = 14.0
+    try:
+        if not math.isfinite(border_radius):
+            border_radius = 14.0
+    except OverflowError:
+        border_radius = 14.0
+    border_radius = max(0.0, min(32.0, float(border_radius)))
+    if isinstance(unread_count, bool) or not isinstance(unread_count, int):
+        unread_count = 0
+    unread_count = max(0, min(999, unread_count))
     if isinstance(message_max_width, bool) or not isinstance(message_max_width, (int, float)):
         message_max_width = MESSAGE_MAX_WIDTH
     message_max_width = max(120, min(600, int(message_max_width)))
@@ -272,11 +305,24 @@ def compute_layout(
 
     # --- message thread band (below the pet) ----------------------------
     message_rects: list[MessageRect] = []
+    collapsed_bubble_rect = None
+    message_toggle_rect = None
     band_top = pet_top + cell_height + PET_BOTTOM_GAP
+    is_collapsed = bool(messages_collapsed and messages)
+    if is_collapsed:
+        collapsed_bubble_rect = cairo.RectangleInt(
+            (width - COLLAPSED_BUBBLE_WIDTH) // 2, band_top,
+            COLLAPSED_BUBBLE_WIDTH, COLLAPSED_BUBBLE_HEIGHT,
+        )
+    elif messages:
+        message_toggle_rect = cairo.RectangleInt(
+            width - MESSAGE_TOGGLE_SIZE - 8, band_top,
+            MESSAGE_TOGGLE_SIZE, MESSAGE_TOGGLE_SIZE,
+        )
     bubble_w = min(message_max_width, max(0, width - 2 * MESSAGE_PAD_X))
     bubble_x = (width - bubble_w) // 2
-    y = band_top
-    for index, message in enumerate(messages):
+    y = band_top + (MESSAGE_TOGGLE_SIZE + 4 if messages and not is_collapsed else 0)
+    for index, message in enumerate(() if is_collapsed else messages):
         thread_id = message.get("threadId") or ""
         has_text = bool(message.get("text"))
         lines = 2 if has_text else 1
@@ -291,8 +337,13 @@ def compute_layout(
 
     bubble_area = sum(m.rect.height for m in message_rects)
     bubble_area += MESSAGE_BUBBLE_GAP * max(0, len(message_rects) - 1)
-    if message_rects:
-        message_band_height = bubble_area + MESSAGE_BOTTOM_GAP
+    if collapsed_bubble_rect is not None:
+        message_band_height = COLLAPSED_BUBBLE_HEIGHT + MESSAGE_BOTTOM_GAP
+        message_band_rect = cairo.RectangleInt(0, band_top, width, message_band_height)
+        total_height = band_top + message_band_height
+    elif message_rects:
+        control_space = MESSAGE_TOGGLE_SIZE + 4 if message_toggle_rect is not None else 0
+        message_band_height = control_space + bubble_area + MESSAGE_BOTTOM_GAP
         message_band_rect = cairo.RectangleInt(
             0, band_top, width, message_band_height
         )
@@ -325,7 +376,25 @@ def compute_layout(
         chip_band_rect=chip_band_rect,
         message_band_rect=message_band_rect,
         pet_rect=pet_rect,
+        theme_mode=theme_mode,
+        plugin_opacity=plugin_opacity,
+        message_opacity=message_opacity,
+        border_radius=border_radius,
+        unread_count=unread_count,
+        collapsed_bubble_rect=collapsed_bubble_rect,
+        message_toggle_rect=message_toggle_rect,
     )
+
+
+def _bounded_opacity(value, default):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    try:
+        if not math.isfinite(value):
+            return default
+    except OverflowError:
+        return default
+    return max(0.1, min(1.0, float(value)))
 
 
 def input_rectangles(layout: OverlayLayout) -> tuple[cairo.RectangleInt, ...]:
@@ -337,6 +406,10 @@ def input_rectangles(layout: OverlayLayout) -> tuple[cairo.RectangleInt, ...]:
     rects = [layout.pet_rect]
     rects.extend(chip.rect for chip in layout.chip_rects)
     rects.extend(message.rect for message in layout.message_rects)
+    if layout.collapsed_bubble_rect is not None:
+        rects.append(layout.collapsed_bubble_rect)
+    if layout.message_toggle_rect is not None:
+        rects.append(layout.message_toggle_rect)
     return tuple(rects)
 
 
@@ -354,6 +427,11 @@ def hit_test(layout: OverlayLayout, x: float, y: float) -> Hit | None:
         r = chip.rect
         if r.x <= x < r.x + r.width and r.y <= y < r.y + r.height:
             return Hit("chip", chip.index, None, chip.surface)
+
+    for kind, rect in (("message-expand", layout.collapsed_bubble_rect),
+                       ("message-collapse", layout.message_toggle_rect)):
+        if rect is not None and rect.x <= x < rect.x + rect.width and rect.y <= y < rect.y + rect.height:
+            return Hit(kind, None, None, None)
 
     if layout.message_band_rect is not None:
         band = layout.message_band_rect
@@ -388,11 +466,18 @@ def rounded_rect(
     if r <= 0:
         context.rectangle(x, y, w, h)
         return
+    # Smooth continuous-corner approximation, rather than four circular arcs.
+    k = 0.4477
     context.new_sub_path()
-    context.arc(x + w - r, y + r, r, -math.pi / 2, 0)
-    context.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
-    context.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
-    context.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    context.move_to(x + r, y)
+    context.line_to(x + w - r, y)
+    context.curve_to(x + w - r * (1-k), y, x+w, y+r*(1-k), x+w, y+r)
+    context.line_to(x+w, y+h-r)
+    context.curve_to(x+w, y+h-r*(1-k), x+w-r*(1-k), y+h, x+w-r, y+h)
+    context.line_to(x+r, y+h)
+    context.curve_to(x+r*(1-k), y+h, x, y+h-r*(1-k), x, y+h-r)
+    context.line_to(x, y+r)
+    context.curve_to(x, y+r*(1-k), x+r*(1-k), y, x+r, y)
     context.close_path()
 
 
@@ -416,8 +501,13 @@ def draw_plugin_chips(context: cairo.Context, layout: OverlayLayout) -> None:
     for chip in layout.chip_rects:
         r = chip.rect
         color = STATE_COLORS.get(chip.surface.get("state"), DEFAULT_STATE_COLOR)
-        context.set_source_rgba(color[0], color[1], color[2], CHIP_ALPHA)
-        rounded_rect(context, r.x, r.y, r.width, r.height, CHIP_RADIUS)
+        background = (0, 0, 0) if layout.theme_mode == "dark" else (1, 1, 1)
+        ink = (1, 1, 1) if layout.theme_mode == "dark" else (0, 0, 0)
+        context.set_source_rgba(*background, layout.plugin_opacity)
+        rounded_rect(context, r.x, r.y, r.width, r.height, layout.border_radius)
+        context.fill()
+        context.set_source_rgb(*color)
+        context.arc(r.x + CHIP_PAD_X / 2, r.y + r.height / 2, 3, 0, 2 * math.pi)
         context.fill()
         text = "{}: {}".format(
             chip.surface.get("label", ""), chip.surface.get("value", "")
@@ -427,7 +517,7 @@ def draw_plugin_chips(context: cairo.Context, layout: OverlayLayout) -> None:
         )
         _, text_h = text_layout.get_size()
         text_h = text_h / Pango.SCALE
-        context.set_source_rgb(1, 1, 1)
+        context.set_source_rgb(*ink)
         context.move_to(r.x + CHIP_PAD_X, r.y + (r.height - text_h) / 2.0)
         PangoCairo.show_layout(context, text_layout)
 
@@ -440,10 +530,10 @@ def draw_message_threads(context: cairo.Context, layout: OverlayLayout) -> None:
     """
     for msg in layout.message_rects:
         r = msg.rect
-        context.set_source_rgba(
-            BUBBLE_BG[0], BUBBLE_BG[1], BUBBLE_BG[2], BUBBLE_ALPHA
-        )
-        rounded_rect(context, r.x, r.y, r.width, r.height, BUBBLE_RADIUS)
+        background = (0, 0, 0) if layout.theme_mode == "dark" else (1, 1, 1)
+        ink = (1, 1, 1) if layout.theme_mode == "dark" else (0, 0, 0)
+        context.set_source_rgba(*background, layout.message_opacity)
+        rounded_rect(context, r.x, r.y, r.width, r.height, layout.border_radius)
         context.fill()
         status_color = {"running": (.38, .72, .91), "review": (.71, .63, .94),
                         "waiting": (.91, .73, .36), "done": (.42, .80, .59),
@@ -456,15 +546,13 @@ def draw_message_threads(context: cairo.Context, layout: OverlayLayout) -> None:
         title_layout = _text_layout(context, title, layout.message_font_size, inner_w)
         _, title_h = title_layout.get_size()
         title_h = title_h / Pango.SCALE
-        context.set_source_rgb(*TEXT_PRIMARY)
+        context.set_source_rgb(*ink)
         context.move_to(r.x + MESSAGE_PAD_X + 12, r.y + MESSAGE_PAD_Y)
         PangoCairo.show_layout(context, title_layout)
         text = msg.message.get("text")
         if text:
             text_layout = _text_layout(context, text, max(5.0, layout.message_font_size - 1.0), inner_w)
-            context.set_source_rgba(
-                1, 1, 1, TEXT_SECONDARY_ALPHA
-            )
+            context.set_source_rgba(*ink, TEXT_SECONDARY_ALPHA)
             context.move_to(
                 r.x + MESSAGE_PAD_X + 12,
                 r.y + MESSAGE_PAD_Y + title_h + MESSAGE_LINE_GAP,
@@ -472,7 +560,49 @@ def draw_message_threads(context: cairo.Context, layout: OverlayLayout) -> None:
             PangoCairo.show_layout(context, text_layout)
 
 
+def _draw_chevron(context, rect, upward, ink):
+    cx, cy = rect.x + rect.width / 2, rect.y + rect.height / 2
+    context.set_source_rgb(*ink)
+    context.set_line_width(2)
+    context.set_line_cap(cairo.LINE_CAP_ROUND)
+    context.set_line_join(cairo.LINE_JOIN_ROUND)
+    if upward:
+        context.move_to(cx - 5, cy + 2); context.line_to(cx, cy - 3); context.line_to(cx + 5, cy + 2)
+    else:
+        context.move_to(cx - 5, cy - 2); context.line_to(cx, cy + 3); context.line_to(cx + 5, cy - 2)
+    context.stroke()
+
+
+def draw_message_controls(context: cairo.Context, layout: OverlayLayout) -> None:
+    background = (0, 0, 0) if layout.theme_mode == "dark" else (1, 1, 1)
+    ink = (1, 1, 1) if layout.theme_mode == "dark" else (0, 0, 0)
+    rect = layout.collapsed_bubble_rect
+    if rect is not None:
+        context.set_source_rgba(*background, layout.message_opacity)
+        rounded_rect(context, rect.x, rect.y, rect.width, rect.height, layout.border_radius)
+        context.fill()
+        _draw_chevron(context, rect, True, ink)
+        if layout.unread_count:
+            label = "99+" if layout.unread_count > 99 else str(layout.unread_count)
+            width = 24 if len(label) > 2 else 18
+            bx, by = rect.x + rect.width - width / 2 + 2, rect.y - 7
+            context.set_source_rgb(.82, .16, .18)
+            rounded_rect(context, bx, by, width, 16, 8); context.fill()
+            badge = _text_layout(context, label, 8, width - 4)
+            _, height = badge.get_size(); height /= Pango.SCALE
+            context.set_source_rgb(1, 1, 1)
+            context.move_to(bx + (width - 4) / 2, by + (16 - height) / 2)
+            PangoCairo.show_layout(context, badge)
+    elif layout.message_toggle_rect is not None:
+        rect = layout.message_toggle_rect
+        context.set_source_rgba(*background, layout.message_opacity)
+        rounded_rect(context, rect.x, rect.y, rect.width, rect.height,
+                     min(layout.border_radius, rect.height / 2)); context.fill()
+        _draw_chevron(context, rect, False, ink)
+
+
 def draw_overlay(context: cairo.Context, layout: OverlayLayout) -> None:
     """Draw plugin chips and message thread bubbles for one frame."""
     draw_plugin_chips(context, layout)
     draw_message_threads(context, layout)
+    draw_message_controls(context, layout)

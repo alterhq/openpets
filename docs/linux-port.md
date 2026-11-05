@@ -46,6 +46,13 @@ PYTHONPATH=Linux /usr/bin/python3 -m openpets_linux notify --title Build --statu
 
 Click a notification row or **Messages / actions…** to view full content,
 actions and session history. **Choose pet…** previews and switches local pets.
+**Appearance settings…** selects black-background dark mode or white-background
+light mode, plugin/message opacity, and corner radius. Expanded messages have a
+collapse control; the compact bubble shows the unread count and expands on click.
+Background blur is compositor-owned: enable it in a compatible compositor such
+as Picom (`blur-background` for transparent ARGB windows). OpenPets reports that
+setup is needed, but cannot detect the compositor's active blur rules reliably
+or configure them automatically.
 Use **Display settings…** to adjust pet scale, message-bubble width and message
 font size; settings persist in `config.json` and apply immediately.
 
