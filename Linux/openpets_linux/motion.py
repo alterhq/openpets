@@ -373,6 +373,13 @@ class MotionController:
         self.state.settled = False
         self.state.moving_since_ms = self._now_ms()
 
+    def reanchor_after_drag(self) -> None:
+        """Discard a stale free-roam destination after the user repositions us."""
+        self.position = tuple(map(float, self.position))
+        self.state.last_position = self.position
+        if self.mode == MODE_FREE_ROAM and self.workarea is not None:
+            self._start_roam_walk()
+
     # -- tick ----------------------------------------------------------
 
     def tick(

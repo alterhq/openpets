@@ -86,7 +86,7 @@ class AnimationDrawingTests(unittest.TestCase):
         self.assertEqual(window.state._animation_expires_at, expiry)
         self.assertFalse(window.state.loop)
 
-    def test_v2_drag_selects_gaze_pose_without_moving_and_release_cleans_up(self):
+    def test_v2_drag_selects_gaze_pose_and_moves_with_pointer(self):
         import gi
         gi.require_version("GdkPixbuf", "2.0")
         gi.require_version("Gdk", "3.0")
@@ -113,13 +113,19 @@ class AnimationDrawingTests(unittest.TestCase):
                     original_move = window.move
                     window.move = lambda x, y: moved.append((x, y))
                     window.begin_drag(SimpleNamespace(x_root=100, y_root=100))
+                    ox, oy = window.drag_origin[2], window.drag_origin[3]
+                    # Upward drag: gaze rotates up and the window follows.
                     window.on_motion_notify(window, SimpleNamespace(
                         x_root=100, y_root=60, state=Gdk.ModifierType.BUTTON1_MASK))
                     self.assertEqual(window.look_direction, (9, 0))
-                    self.assertEqual(moved, [])
+                    self.assertEqual(moved, [(ox, oy - 40)])
+                    # Rightward drag from the previous position: velocity (40, 0)
+                    # -> right gaze; window follows the pointer (x displacement,
+                    # y stays at the previous drag position).
                     window.on_motion_notify(window, SimpleNamespace(
-                        x_root=140, y_root=100, state=Gdk.ModifierType.BUTTON1_MASK))
+                        x_root=140, y_root=60, state=Gdk.ModifierType.BUTTON1_MASK))
                     self.assertEqual(window.look_direction, (9, 4))
+                    self.assertEqual(moved[-1], (ox + 40, oy - 40))
                     window.end_drag()
                     self.assertFalse(window.drag_active)
                     self.assertIsNone(window.look_direction)
@@ -189,10 +195,64 @@ class AnimationDrawingTests(unittest.TestCase):
         self.assertFalse(window._idle_eligible())
         window.end_drag()
 
+    def test_idle_gesture_fires_when_eligible_between_roam_legs(self):
+        from gi.repository import GLib
+        window = self.make_window()
+        if window.idle_source:
+            GLib.source_remove(window.idle_source)
+            window.idle_source = 0
+        # Settled (between roam legs), not dragging, no status animation: eligible.
+        window.motion.state.settled = True
+        window.motion.state.paused = False
+        self.assertTrue(window._idle_eligible())
+        with patch.object(window.idle_picker, "pick", return_value="jumping"):
+            window.on_idle_tick()
+        self.assertEqual(window.current_animation, "jumping")
+        self.assertFalse(window.state.loop)
+
+    def test_idle_gesture_blocked_while_actually_moving_preserves_roam(self):
+        from gi.repository import GLib
+        window = self.make_window()
+        if window.idle_source:
+            GLib.source_remove(window.idle_source)
+            window.idle_source = 0
+        # Actually moving (mid-roam-leg): not eligible, roam gait preserved.
+        window.motion.state.settled = False
+        self.assertFalse(window._idle_eligible())
+        window.motion_animation = "running-right"
+        window.refresh(reset_animation=True)
+        self.assertEqual(window.current_animation, "running-right")
+        self.assertFalse(window._idle_eligible())
+
+    def test_idle_gesture_blocked_while_dragging(self):
+        from gi.repository import GLib
+        window = self.make_window()
+        if window.idle_source:
+            GLib.source_remove(window.idle_source)
+            window.idle_source = 0
+        window.begin_drag(SimpleNamespace(x_root=100, y_root=100))
+        self.assertFalse(window._idle_eligible())
+        window.on_idle_tick()  # must not fire a gesture while dragging
+        self.assertEqual(window.current_animation, "idle")
+        window.end_drag()
+
+    def test_idle_gesture_blocked_while_status_animation_playing(self):
+        from gi.repository import GLib
+        window = self.make_window()
+        if window.idle_source:
+            GLib.source_remove(window.idle_source)
+            window.idle_source = 0
+        window.state.apply({"type": "playAnimation", "name": "running"})
+        window.refresh(reset_animation=True)
+        self.assertFalse(window._idle_eligible())
+        window.on_idle_tick()  # must not interrupt an active manual animation
+        self.assertEqual(window.current_animation, "running")
+        self.assertTrue(window.state.loop)
+
     def test_overlay_collapses_and_hit_targets_match(self):
         from openpets_linux.overlay import hit_test
         window = self.make_window()
-        self.assertLess(window.layout.pet_top, 24)
+        self.assertGreater(window.layout.pet_top, window.layout.message_toggle_rect.y + window.layout.message_toggle_rect.height)
         window.state.apply({"type": "notify", "notification": {
             "title": "Build", "text": "Working", "status": "running"}})
         window.refresh()
@@ -205,7 +265,37 @@ class AnimationDrawingTests(unittest.TestCase):
         window.state.clear_messages()
         window.refresh()
         self.assertEqual(len(window.layout.message_rects), 0)
-        self.assertLess(window.height, window.cell_height + 32)
+        self.assertEqual(window.height, window.layout.total_height)
+        self.assertLess(window.height, window.cell_height + 100)
+
+    def test_message_toggle_hides_after_delay_and_returns_on_pet_hover(self):
+        from gi.repository import GLib
+        from openpets_linux.overlay import hit_test, input_rectangles
+        from openpets_linux.ui import MESSAGE_TOGGLE_AUTO_HIDE_MS
+
+        window = self.make_window()
+        self.assertTrue(window.message_toggle_visible)
+        with patch("openpets_linux.ui.GLib.timeout_add", return_value=987):
+            window._schedule_toggle_hide()
+        self.assertEqual(window._toggle_hide_source, 987)
+        self.assertEqual(MESSAGE_TOGGLE_AUTO_HIDE_MS, 2500)
+
+        with patch.object(window, "update_input_shape"), patch.object(window, "queue_draw"):
+            self.assertEqual(window._hide_message_toggle(), GLib.SOURCE_REMOVE)
+            self.assertFalse(window.message_toggle_visible)
+            self.assertNotIn(window.layout.message_toggle_rect,
+                             input_rectangles(window.layout, include_toggle=False))
+            toggle = window.layout.message_toggle_rect
+            self.assertIsNone(hit_test(window.layout, toggle.x + 2, toggle.y + 2,
+                                       include_toggle=False))
+
+            pet = window.layout.pet_rect
+            window.on_pointer_enter(window, SimpleNamespace(
+                x=pet.x + pet.width // 2, y=pet.y + pet.height // 2
+            ))
+            self.assertTrue(window.message_toggle_visible)
+            self.assertTrue(window._pointer_in_pet)
+            self.assertEqual(window._toggle_hide_source, 0)
 
     def test_every_animation_draws_and_advances(self):
         import cairo

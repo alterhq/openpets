@@ -13,6 +13,7 @@ from openpets_linux.animation import (  # noqa: E402
     ANIMATION_DURATIONS,
     DIRECTION_ANIMATIONS,
     IDLE_ACTIONS,
+    IDLE_COOLDOWN_MS,
     IDLE_INTERVAL_MAX_MS,
     IDLE_INTERVAL_MIN_MS,
     IdlePicker,
@@ -149,6 +150,47 @@ class TestIdlePicker(unittest.TestCase):
         interval = picker.next_interval_ms(100, 200)
         self.assertGreaterEqual(interval, 100)
         self.assertLessEqual(interval, 200)
+
+    def test_pick_avoids_immediate_repetition_for_varied_gestures(self):
+        # Advance the injected clock past the cooldown on every pick so the
+        # cooldown does not mask the repetition-avoidance behavior.
+        now = [0.0]
+        picker = IdlePicker(rng=random.Random(3), now_ms=lambda: now[0] * 1000.0)
+        picks = []
+        for _ in range(20):
+            now[0] += 3.0  # 3 s >= IDLE_COOLDOWN_MS, cooldown cleared
+            picks.append(picker.pick())
+        self.assertTrue(all(p in IDLE_ACTIONS for p in picks))
+        self.assertTrue(any(picks[i] != picks[i + 1] for i in range(len(picks) - 1)))
+
+    def test_pick_returns_idle_during_cooldown(self):
+        now = [0.0]
+        picker = IdlePicker(rng=random.Random(1), now_ms=lambda: now[0] * 1000.0)
+        first = picker.pick()
+        self.assertIn(first, IDLE_ACTIONS)
+        # Still within the cooldown: no gesture fires.
+        now[0] += 1.0  # 1 s < IDLE_COOLDOWN_MS (2000 ms)
+        self.assertEqual(picker.pick(), "idle")
+        # Cooldown cleared: gestures fire again.
+        now[0] += 2.0  # 3 s total >= cooldown
+        self.assertIn(picker.pick(), IDLE_ACTIONS)
+
+    def test_cooldown_remaining_ms(self):
+        now = [0.0]
+        picker = IdlePicker(rng=random.Random(1), now_ms=lambda: now[0] * 1000.0)
+        self.assertEqual(picker.cooldown_remaining_ms(), 0)
+        picker.pick()
+        now[0] += 0.5  # 500 ms elapsed of a 2000 ms cooldown
+        self.assertEqual(picker.cooldown_remaining_ms(), IDLE_COOLDOWN_MS - 500)
+        now[0] += 3.0  # well past the cooldown
+        self.assertEqual(picker.cooldown_remaining_ms(), 0)
+
+    def test_interval_in_new_bounds(self):
+        picker = IdlePicker(rng=random.Random(7))
+        for _ in range(200):
+            interval = picker.next_interval_ms()
+            self.assertGreaterEqual(interval, IDLE_INTERVAL_MIN_MS)
+            self.assertLessEqual(interval, IDLE_INTERVAL_MAX_MS)
 
 
 if __name__ == "__main__":

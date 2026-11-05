@@ -193,7 +193,9 @@ Settings:
 
 - `display.scale`: Sprite display scale.
 - `display.messageAreaHeight`: Reserved height for the message bubble area.
-- Linux GTK also persists `display.messageBubbleWidth` and `display.messageFontSize`; adjust them from **Display settings…** in the pet menu.
+- Linux GTK also persists `display.messageBubbleWidth` and `display.messageFontSize`; adjust them from **Settings…** in the pet menu.
+- Linux GTK also persists `display.pluginSide` ("left" or "right", default "right"), placing the plugin chip stack on the chosen side of the window.
+- Linux GTK also persists `display.collapsedMessagePreviewSeconds` (integer 1–60, default 5 seconds). When messages are collapsed, active notifications preview briefly; each thread expires independently, and a same-thread update resets its timer.
 - `socketPath`: Unix socket used by the CLI and pet host.
 - `mcpHost`: HTTP bind host for the MCP server.
 - `mcpPort`: HTTP port for the MCP server.

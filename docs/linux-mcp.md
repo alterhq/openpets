@@ -1,8 +1,10 @@
 # Linux MCP and OpenCode V2
 
-The optional MCP service uses the official Python SDK (`mcp==1.26.0`, tested),
-not a hand-written JSON-RPC implementation. GTK/CLI do not import the SDK or
-start an HTTP server unless requested. No OpenCode files are edited automatically.
+The MCP service uses the official Python SDK (`mcp==1.26.0`, tested), not a
+hand-written JSON-RPC implementation. The GUI starts its loopback service by
+default; the tray/right-click checkbox controls and persists that preference.
+The CLI does not start an HTTP server unless requested. No OpenCode files are
+edited automatically.
 
 ## Install the optional SDK
 
@@ -36,7 +38,7 @@ are configurable. Non-loopback bind hosts are refused; SDK Host/Origin checks
 are retained. Same-user local clients can call this unauthenticated local service.
 Do not proxy it to an untrusted network.
 
-Alternatively enable **MCP server (loopback)** in the pet's tray/right-click
+**MCP server (loopback)** is enabled by default in the pet's tray/right-click
 menu. This starts an owned child service and saves `linuxMCPEnabled`; closing
 the GUI stops only that owned process, not another independently started server.
 Host/port/endpoint use `mcpHost`, `mcpPort`, `mcpEndpoint` from OpenPets config.

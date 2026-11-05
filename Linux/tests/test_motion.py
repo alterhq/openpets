@@ -351,6 +351,16 @@ class TestDragPauseResume(unittest.TestCase):
         # Waypoint should be re-picked or retained; either way not None.
         self.assertIsNotNone(self.mc.state.waypoint)
 
+    def test_drag_reanchor_replaces_free_roam_waypoint_from_drop_position(self):
+        self.mc.set_mode(MODE_FREE_ROAM)
+        self.mc.set_position(240, 220)
+        old_waypoint = self.mc.state.waypoint
+        self.mc.pause()
+        self.mc.set_position(610, 310)
+        self.mc.reanchor_after_drag()
+        self.assertNotEqual(self.mc.state.waypoint, old_waypoint)
+        self.assertEqual(self.mc.state.last_position, (610.0, 310.0))
+
 
 class TestDtClamping(unittest.TestCase):
     def test_large_dt_does_not_teleport(self):

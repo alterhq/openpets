@@ -9,20 +9,25 @@ Public contract (for the UI/geometry reviewer):
 
 * :data:`ANIMATION_DURATIONS` -- per-frame durations (ms) per animation name.
 * :data:`IDLE_ACTIONS` -- spontaneous idle actions eligible when the pet is
-  idle, not being dragged, and not running a status/manual animation.
+  idle, not being dragged, and not running a status/manual animation. Deliberately
+  excludes status-specific animations (``failed``/``waiting``/``review``) so a
+  free-roam pet never forces a failure or waiting pose.
 * :data:`DIRECTION_ANIMATIONS` -- drag direction -> running animation name.
 * :func:`classify_direction` -- classify a drag delta (left/right/up/down/none).
 * :func:`drag_animation` -- animation name for a drag delta with sensible
   fallback for every direction.
 * :class:`IdlePicker` -- deterministic idle-action + interval picker backed by
-  an injected :class:`random.Random` (tests can pass a seeded instance).
+  an injected :class:`random.Random` (tests can pass a seeded instance). Enforces
+  a cooldown between gestures and avoids immediate repetition so idle gestures
+  feel varied instead of robotic.
 """
 
 from __future__ import annotations
 
 import math
 import random
-from typing import Optional, Tuple
+import time
+from typing import Callable, Optional, Tuple
 
 __all__ = [
     "ANIMATION_DURATIONS",
@@ -55,6 +60,8 @@ ANIMATION_DURATIONS: dict[str, Tuple[int, ...]] = {
 
 # Animations eligible as spontaneous idle actions when there is no active
 # status-driven or manual animation and the pet is not being dragged.
+# ``failed``/``waiting``/``review`` are deliberately excluded: they are
+# status-specific and a free-roam pet must not force a failure or waiting pose.
 IDLE_ACTIONS: Tuple[str, ...] = ("waving", "jumping")
 
 # Drag direction -> running animation. The atlas has no dedicated up/down
@@ -71,9 +78,16 @@ DIRECTION_ANIMATIONS: dict[str, str] = {
 DIRECTION_THRESHOLD_PX = 6.0
 
 # Idle scheduler bounds (ms). The next idle action fires after a random
-# interval in this range once the pet returns to idle.
-IDLE_INTERVAL_MIN_MS = 4000
-IDLE_INTERVAL_MAX_MS = 11000
+# interval in this range once the pet returns to idle. Tighter than the
+# former 4-11s window so gestures have a better chance to fire during the
+# short rests that occur between free-roam legs.
+IDLE_INTERVAL_MIN_MS = 2000
+IDLE_INTERVAL_MAX_MS = 7000
+
+# Minimum gap (ms) between consecutive spontaneous idle gestures. Keeps the
+# pet from gesturing back-to-back so gait/action transitions stay clean and
+# the pet still spends most of its time walking or resting between legs.
+IDLE_COOLDOWN_MS = 2000
 
 
 def classify_direction(
@@ -125,22 +139,60 @@ class IdlePicker:
     """Pick spontaneous idle actions and intervals from an injected RNG.
 
     Pure and dependency-free: pass a seeded :class:`random.Random` in tests to
-    make idle action selection and scheduling fully deterministic.
+    make idle action selection and scheduling fully deterministic, and pass an
+    injected clock (ms) to make the cooldown deterministic too.
+
+    * ``pick()`` returns one eligible idle animation, or ``"idle"`` when none
+      exist or the cooldown is still active. When several actions are eligible
+      it avoids repeating the immediately previous action so idle gestures feel
+      varied instead of robotic.
+    * ``cooldown_remaining_ms()`` reports how many ms are left before another
+      gesture may fire (0 when none).
+    * ``next_interval_ms()`` returns a random idle-check interval.
     """
 
     def __init__(
         self,
         actions: Tuple[str, ...] = IDLE_ACTIONS,
         rng: Optional[random.Random] = None,
+        cooldown_ms: int = IDLE_COOLDOWN_MS,
+        now_ms: Optional[Callable[[], float]] = None,
     ) -> None:
         self.actions = tuple(actions)
         self._rng = rng or random.Random()
+        self.cooldown_ms = int(cooldown_ms)
+        self._now_ms = now_ms or (lambda: time.monotonic() * 1000.0)
+        self._last_action: Optional[str] = None
+        self._last_pick_ms: Optional[float] = None
 
     def pick(self) -> str:
-        """Return one eligible idle animation, or ``"idle"`` when none exist."""
+        """Return one eligible idle animation, or ``"idle"`` when cooling down."""
         if not self.actions:
             return "idle"
-        return self._rng.choice(self.actions)
+        now = self._now_ms()
+        if (
+            self._last_pick_ms is not None
+            and now - self._last_pick_ms < self.cooldown_ms
+        ):
+            return "idle"
+        candidates = list(self.actions)
+        # Avoid immediate repetition when alternatives exist: varied gestures,
+        # not the same wave/jump on every tick.
+        if len(candidates) > 1 and self._last_action is not None:
+            others = [a for a in candidates if a != self._last_action]
+            if others:
+                candidates = others
+        action = self._rng.choice(candidates)
+        self._last_action = action
+        self._last_pick_ms = now
+        return action
+
+    def cooldown_remaining_ms(self) -> int:
+        """Milliseconds left before another gesture may fire (0 when none)."""
+        if self._last_pick_ms is None:
+            return 0
+        remaining = self.cooldown_ms - (self._now_ms() - self._last_pick_ms)
+        return max(0, int(remaining))
 
     def next_interval_ms(
         self, minimum_ms: int = IDLE_INTERVAL_MIN_MS, maximum_ms: int = IDLE_INTERVAL_MAX_MS
