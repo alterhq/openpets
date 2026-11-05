@@ -240,6 +240,9 @@ class GUIFeatures(unittest.TestCase):
             with patch.dict(os.environ, environment):
                 window = PetWindow(bundled_starcorn_path(), .42, directory + "/host.sock")
                 try:
+                    # Keep the default startup server from claiming port 3001;
+                    # this test starts MCP later on its own reserved port.
+                    window.settings.update({"linuxMCPEnabled": False})
                     window.start()
                     window.open_chooser()
                     self.assertGreater(len(window.chooser.entries), 0)
