@@ -1,6 +1,7 @@
 """Real GTK atlas/drawing regression; isolated config, no account reads."""
 
 import importlib.util
+import json
 import os
 import tempfile
 import unittest
@@ -54,6 +55,20 @@ class AnimationDrawingTests(unittest.TestCase):
         self.assertEqual(window.state._animation_expires_at, expiry)
         self.assertFalse(window.state.loop)
 
+    def test_v1_drag_still_moves_window(self):
+        import gi
+        gi.require_version("Gdk", "3.0")
+        from gi.repository import Gdk
+        window = self.make_window()
+        moved = []
+        window.move = lambda x, y: moved.append((x, y))
+        window.begin_drag(SimpleNamespace(x_root=100, y_root=100))
+        window.on_motion_notify(window, SimpleNamespace(
+            x_root=120, y_root=110, state=Gdk.ModifierType.BUTTON1_MASK))
+        self.assertTrue(moved)
+        self.assertIsNone(window.look_direction)
+        window.end_drag()
+
     def test_vertical_drag_falls_back_to_underlying_animation(self):
         window = self.make_window()
         window.state.apply({"type": "playAnimation", "name": "review", "loop": False,
@@ -70,6 +85,47 @@ class AnimationDrawingTests(unittest.TestCase):
         self.assertEqual(window.current_animation, "review")
         self.assertEqual(window.state._animation_expires_at, expiry)
         self.assertFalse(window.state.loop)
+
+    def test_v2_drag_selects_gaze_pose_without_moving_and_release_cleans_up(self):
+        import gi
+        gi.require_version("GdkPixbuf", "2.0")
+        gi.require_version("Gdk", "3.0")
+        from gi.repository import Gdk, GdkPixbuf
+        from openpets_linux.ui import PetWindow
+
+        with tempfile.TemporaryDirectory(prefix="openpets-v2-drag-gui-") as directory:
+            pet_dir = os.path.join(directory, "pet")
+            os.mkdir(pet_dir)
+            sheet = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, True, 8, 8 * 16, 11 * 16)
+            sheet.fill(0xff0000ff)
+            sheet.savev(os.path.join(pet_dir, "spritesheet.png"), "png", [], [])
+            with open(os.path.join(pet_dir, "pet.json"), "w", encoding="utf-8") as manifest:
+                json.dump({"id": "v2-test", "spritesheetPath": "spritesheet.png",
+                           "spriteVersionNumber": 2}, manifest)
+            with patch.dict(os.environ, {"HOME": directory,
+                                         "XDG_CONFIG_HOME": directory + "/config",
+                                         "XDG_DATA_HOME": directory + "/data",
+                                         "DBUS_SESSION_BUS_ADDRESS": ""}):
+                window = PetWindow(pet_dir, .42, directory + "/host.sock")
+                try:
+                    window.start()
+                    moved = []
+                    original_move = window.move
+                    window.move = lambda x, y: moved.append((x, y))
+                    window.begin_drag(SimpleNamespace(x_root=100, y_root=100))
+                    window.on_motion_notify(window, SimpleNamespace(
+                        x_root=100, y_root=60, state=Gdk.ModifierType.BUTTON1_MASK))
+                    self.assertEqual(window.look_direction, (9, 0))
+                    self.assertEqual(moved, [])
+                    window.on_motion_notify(window, SimpleNamespace(
+                        x_root=140, y_root=100, state=Gdk.ModifierType.BUTTON1_MASK))
+                    self.assertEqual(window.look_direction, (9, 4))
+                    window.end_drag()
+                    self.assertFalse(window.drag_active)
+                    self.assertIsNone(window.look_direction)
+                    window.move = original_move
+                finally:
+                    window.cleanup()
 
     def test_gtk_pointer_signals_are_wired(self):
         from gi.repository import Gdk

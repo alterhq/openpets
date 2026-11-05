@@ -18,6 +18,8 @@ from openpets_linux.animation import (  # noqa: E402
     IdlePicker,
     classify_direction,
     drag_animation,
+    look_direction_cell,
+    look_direction_index,
 )
 
 import random
@@ -101,6 +103,23 @@ class TestDragAnimation(unittest.TestCase):
     def test_no_movement_idle(self):
         self.assertEqual(drag_animation(0, 0), "idle")
         self.assertEqual(drag_animation(2, 1), "idle")
+
+
+class TestLookDirection(unittest.TestCase):
+    def test_sixteen_clockwise_directions_starting_at_up(self):
+        vectors = [
+            (0, -10), (4, -10), (10, -10), (10, -4),
+            (10, 0), (10, 4), (10, 10), (4, 10),
+            (0, 10), (-4, 10), (-10, 10), (-10, 4),
+            (-10, 0), (-10, -4), (-10, -10), (-4, -10),
+        ]
+        self.assertEqual([look_direction_index(*vector) for vector in vectors], list(range(16)))
+
+    def test_direction_indices_map_row_major_to_v2_extra_rows(self):
+        self.assertEqual(look_direction_cell(0, -1), (9, 0))
+        self.assertEqual(look_direction_cell(1, 0), (9, 4))
+        self.assertEqual(look_direction_cell(0, 1), (10, 0))
+        self.assertEqual(look_direction_cell(-1, 0), (10, 4))
 
 
 class TestIdlePicker(unittest.TestCase):

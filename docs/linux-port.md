@@ -8,9 +8,9 @@ unchanged. Docker is for development/testing, never required to run the pet.
 
 - Bundled Starcorn from OpenPetsKit v0.2.1, with its MIT notice; no asset
   downloads on launch. `run --pet PATH` remains available for local bundles.
-  Custom Codex pet atlases support v1 (8x9) and v2 (8x11); v2's two extra
-  look-direction rows are accepted while the nine standard animation rows are
-  played by the current host.
+  Custom Codex pet atlases support v1 (8x9) and v2 (8x11). V2 pets use their
+  16 look-direction poses while dragged without moving the window; v1 pets
+  retain drag-to-move behavior.
 - Pet chooser with preview, local/XDG discovery, persistent active pet and
   per-pet position; restored positions are clamped to a current monitor.
 - Frame-timed sprites, drag, tray menu, outside-rectangle click-through.

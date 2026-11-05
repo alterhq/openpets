@@ -27,6 +27,11 @@ def manifest_image(directory):
     return _manifest_bundle(directory)[0]
 
 
+def sprite_version(directory):
+    """Return the validated sprite atlas version for a local pet bundle."""
+    return _manifest_bundle(directory)[1]
+
+
 def load_atlas(directory, scale):
     # Keep CLI and pure tests usable without GTK or an active display.
     import gi
