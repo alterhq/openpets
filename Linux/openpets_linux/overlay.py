@@ -625,14 +625,13 @@ def draw_plugin_chips(context: cairo.Context, layout: OverlayLayout) -> None:
         text_layout = _text_layout(
             context, text, CHIP_FONT_SIZE, r.width - 2 * CHIP_PAD_X
         )
-        text_w, text_h = text_layout.get_size()
-        text_w = text_w / Pango.SCALE
+        text_layout.set_alignment(Pango.Alignment.CENTER)
+        _, text_h = text_layout.get_size()
         text_h = text_h / Pango.SCALE
         context.set_source_rgb(*ink)
-        # Center the label/value horizontally within the chip so the text is
-        # not left-shifted after the adornment dot was removed.
-        text_x = r.x + max(CHIP_PAD_X, (r.width - text_w) / 2.0)
-        context.move_to(text_x, r.y + (r.height - text_h) / 2.0)
+        # Pango's layout has a fixed inner width for ellipsizing; center its
+        # text within that width rather than centering the layout box itself.
+        context.move_to(r.x + CHIP_PAD_X, r.y + (r.height - text_h) / 2.0)
         PangoCairo.show_layout(context, text_layout)
 
 

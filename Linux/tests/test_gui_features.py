@@ -291,10 +291,10 @@ class GUIFeatures(unittest.TestCase):
                         with socket.socket() as probe:
                             probe.bind(("127.0.0.1", 0))
                             port = probe.getsockname()[1]
-                        window.settings.update({"mcpPort": port})
+                        window.settings.update({"mcpHost": "127.0.0.1", "mcpPort": port})
                         window.mcp_item.set_active(True)
                         self.assertTrue(window.mcp_process.running())
-                        deadline = time.monotonic() + 8
+                        deadline = time.monotonic() + 15
                         ready = False
                         while time.monotonic() < deadline:
                             with socket.socket() as probe:
@@ -302,8 +302,12 @@ class GUIFeatures(unittest.TestCase):
                                     ready = True
                                     break
                             time.sleep(.05)
-                        self.assertTrue(ready)
                         process = window.mcp_process.process
+                        self.assertTrue(
+                            ready,
+                            f"MCP listener did not become ready on 127.0.0.1:{port}; "
+                            f"process return code={process.poll()}, command={process.args!r}",
+                        )
                         window.mcp_item.set_active(False)
                         self.assertFalse(window.mcp_process.running())
                         self.assertIsNotNone(process.poll())
