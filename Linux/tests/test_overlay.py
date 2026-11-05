@@ -242,7 +242,7 @@ class TestComputeLayoutMessages(unittest.TestCase):
         self.assertEqual(b.rect.y, a.rect.y + a.rect.height + MESSAGE_BUBBLE_GAP)
         self.assertEqual(
             layout.message_band_height,
-            a.rect.height + MESSAGE_BUBBLE_GAP + b.rect.height + MESSAGE_BOTTOM_GAP,
+            30 + a.rect.height + MESSAGE_BUBBLE_GAP + b.rect.height + MESSAGE_BOTTOM_GAP,
         )
         self.assertEqual(
             layout.total_height,
@@ -261,6 +261,27 @@ class TestComputeLayoutMessages(unittest.TestCase):
         self.assertEqual(layout.message_band_height, 0)
         self.assertIsNone(layout.message_band_rect)
         self.assertEqual(layout.message_band_top, layout.pet_top + CELL_H + PET_BOTTOM_GAP)
+
+    def test_collapsed_messages_use_summary_bubble_with_unread_badge(self):
+        layout = compute_layout(WIDTH, CELL_W, CELL_H, (),
+                                [_message("a"), _message("b")],
+                                messages_collapsed=True, unread_count=2)
+        self.assertEqual(layout.message_rects, ())
+        self.assertIsNotNone(layout.collapsed_bubble_rect)
+        self.assertIsNone(layout.message_toggle_rect)
+        self.assertEqual(layout.unread_count, 2)
+        rects = input_rectangles(layout)
+        r = layout.collapsed_bubble_rect
+        self.assertIn(r, rects)
+        self.assertEqual(hit_test(layout, r.x + r.width // 2, r.y + r.height // 2).kind,
+                         "message-expand")
+
+    def test_expanded_messages_have_collapse_control(self):
+        layout = compute_layout(WIDTH, CELL_W, CELL_H, (), [_message()])
+        self.assertIsNone(layout.collapsed_bubble_rect)
+        rect = layout.message_toggle_rect
+        self.assertIsNotNone(rect)
+        self.assertEqual(hit_test(layout, rect.x + 2, rect.y + 2).kind, "message-collapse")
 
 
 class TestHitTest(unittest.TestCase):
@@ -321,7 +342,7 @@ class TestInputRectangles(unittest.TestCase):
         layout = compute_layout(WIDTH, CELL_W, CELL_H, surfaces, messages)
         rects = input_rectangles(layout)
         # Pet + individual chips/messages; transparent gaps click through.
-        self.assertEqual(len(rects), 1 + len(surfaces) + len(messages))
+        self.assertEqual(len(rects), 2 + len(surfaces) + len(messages))
         for rect in rects:
             self.assertIsInstance(rect, cairo.RectangleInt)
             self.assertGreaterEqual(rect.x, 0)
@@ -367,7 +388,9 @@ class TestRendering(unittest.TestCase):
         stride = surface.get_stride()
         r, g, b, a = _pixel_rgba(data, stride, chip.rect.x + chip.rect.width // 2,
                                  chip.rect.y + chip.rect.height // 2)
-        expected = _blend_over_opaque_black(*STATE_COLORS["success"], CHIP_ALPHA)
+        # The chip surface is black in the default dark theme; status remains
+        # available through its colored status dot.
+        expected = (0, 0, 0, 255)
         self.assertAlmostEqual(r, expected[0], delta=6)
         self.assertAlmostEqual(g, expected[1], delta=6)
         self.assertAlmostEqual(b, expected[2], delta=6)
@@ -384,7 +407,7 @@ class TestRendering(unittest.TestCase):
         stride = surface.get_stride()
         cx, cy = msg.rect.x + msg.rect.width // 2, msg.rect.y + msg.rect.height // 2
         r, g, b, a = _pixel_rgba(data, stride, cx, cy)
-        expected = _blend_over_opaque_black(*BUBBLE_BG, BUBBLE_ALPHA)
+        expected = (0, 0, 0, 255)
         self.assertAlmostEqual(r, expected[0], delta=6)
         self.assertAlmostEqual(g, expected[1], delta=6)
         self.assertAlmostEqual(b, expected[2], delta=6)
@@ -437,7 +460,7 @@ class TestRendering(unittest.TestCase):
             data, stride, chip.rect.x + chip.rect.width // 2,
             chip.rect.y + chip.rect.height // 2,
         )
-        expected = _blend_over_opaque_black(*STATE_COLORS["critical"], CHIP_ALPHA)
+        expected = (0, 0, 0, 255)
         self.assertAlmostEqual(cr, expected[0], delta=6)
 
     def test_unknown_plugin_state_uses_default_color(self):
@@ -450,10 +473,24 @@ class TestRendering(unittest.TestCase):
             data, stride, chip.rect.x + chip.rect.width // 2,
             chip.rect.y + chip.rect.height // 2,
         )
-        expected = _blend_over_opaque_black(*DEFAULT_STATE_COLOR, CHIP_ALPHA)
+        expected = (0, 0, 0, 255)
         self.assertAlmostEqual(r, expected[0], delta=6)
         self.assertAlmostEqual(g, expected[1], delta=6)
         self.assertAlmostEqual(b, expected[2], delta=6)
+
+    def test_light_theme_uses_white_background_and_configured_opacity(self):
+        layout = compute_layout(WIDTH, CELL_W, CELL_H, (), [_message()],
+                                theme_mode="light", message_opacity=.5)
+        surface = cairo.ImageSurface(cairo.Format.ARGB32, layout.width, layout.total_height)
+        context = cairo.Context(surface)
+        context.set_source_rgb(0, 0, 0)
+        context.paint()
+        draw_overlay(context, layout)
+        data = surface.get_data()
+        rect = layout.message_rects[0].rect
+        rgb = _pixel_rgba(data, surface.get_stride(), rect.x + rect.width // 2,
+                          rect.y + rect.height - 3)[:3]
+        self.assertTrue(all(110 <= channel <= 145 for channel in rgb), rgb)
 
 
 if __name__ == "__main__":

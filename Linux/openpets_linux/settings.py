@@ -43,6 +43,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "display": {
         "scale": 0.42,
         "messageAreaHeight": 56,
+        "themeMode": "dark",
+        "pluginOpacity": 0.94,
+        "messageOpacity": 0.94,
+        "blurBackground": False,
+        "borderRadius": 14.0,
+        "messagesCollapsed": False,
     },
 }
 

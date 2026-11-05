@@ -142,7 +142,10 @@ class AnimationDrawingTests(unittest.TestCase):
         window.refresh()
         rect = window.layout.message_rects[0].rect
         self.assertEqual(hit_test(window.layout, rect.x + 1, rect.y + 1).kind, "message")
-        self.assertLessEqual(rect.y - (window.layout.pet_top + window.cell_height), 12)
+        self.assertEqual(window.layout.message_toggle_rect is not None, True)
+        self.assertLessEqual(
+            rect.y - (window.layout.pet_top + window.cell_height), 48
+        )
         window.state.clear_messages()
         window.refresh()
         self.assertEqual(len(window.layout.message_rects), 0)
