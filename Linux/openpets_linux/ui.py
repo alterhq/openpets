@@ -19,7 +19,7 @@ from gi.repository import Gdk, GLib, Gtk
 
 from .core import ANIMATIONS, FINITE_STATUS_ANIMATIONS, State
 from .ipc import bind_socket, cleanup_socket
-from .pet import load_atlas
+from .pet import load_atlas, sprite_version
 from .settings import Settings
 from .library import PetLibrary
 from .notifications import NotificationHistory
@@ -30,6 +30,7 @@ from .animation import (
     IDLE_INTERVAL_MIN_MS,
     IdlePicker,
     drag_animation,
+    look_direction_cell,
 )
 from .motion import (
     MODE_FREE_ROAM,
@@ -79,6 +80,8 @@ class PetWindow(Gtk.Window):
         self.position_source = 0
         self.mcp_process = MCPProcess()
         self.atlas, self.cell_width, self.cell_height = load_atlas(pet_directory, scale)
+        self.look_direction_enabled = sprite_version(pet_directory) == 2
+        self.look_direction = None
         self.frame = 0
         self.current_animation = self.state.animation
         self.frame_source = 0
@@ -338,10 +341,13 @@ class PetWindow(Gtk.Window):
         if chosen is None:
             raise ValueError("Unknown pet ID")
         atlas, width, height = load_atlas(chosen["directory"], self.scale)
+        look_direction_enabled = sprite_version(chosen["directory"]) == 2
         self.save_position()
         directory = self.library.activate(pet_id)
         self.pet_directory, self.pet_id = directory, self.identifier(directory)
         self.atlas, self.cell_width, self.cell_height = atlas, width, height
+        self.look_direction_enabled = look_direction_enabled
+        self.look_direction = None
         self.width = max(360, width,
                          self.message_bubble_width + 2 * MESSAGE_PAD_X)
         self.relayout()
@@ -539,12 +545,15 @@ class PetWindow(Gtk.Window):
         context.paint()
         context.set_operator(cairo.OPERATOR_OVER)
         row = list(ANIMATIONS).index(self.current_animation)
+        column = self.frame
+        if self.drag_active and self.look_direction_enabled and self.look_direction is not None:
+            row, column = self.look_direction
         context.save()
         context.translate(self.layout.pet_x, self.layout.pet_top)
         context.rectangle(0, 0, self.cell_width, self.cell_height)
         context.clip()
         Gdk.cairo_set_source_pixbuf(context, self.atlas,
-                                    -self.frame * self.cell_width, -row * self.cell_height)
+                                    -column * self.cell_width, -row * self.cell_height)
         context.paint()
         context.restore()
         draw_overlay(context, self.layout)
@@ -570,6 +579,7 @@ class PetWindow(Gtk.Window):
         self.drag_last = self.drag_start
         self.drag_origin = (*self.drag_start, *self.get_position())
         self.drag_animation = None
+        self.look_direction = (9, 0) if self.look_direction_enabled else None
         # Sync the motion controller to the drag-start position so resume
         # re-anchors correctly; pause autonomous movement during the drag.
         self.motion.set_position(*self.get_position())
@@ -579,7 +589,7 @@ class PetWindow(Gtk.Window):
         self.queue_draw()
 
     def on_motion_notify(self, _widget, event):
-        """Drag the window with the pointer and play a directional run animation."""
+        """V2 pets look toward the drag; legacy pets retain window dragging."""
         if not self.drag_active:
             return False
         if hasattr(event, "state") and not (event.state & Gdk.ModifierType.BUTTON1_MASK):
@@ -588,10 +598,14 @@ class PetWindow(Gtk.Window):
         x = int(event.x_root)
         y = int(event.y_root)
         sx, sy, px, py = self.drag_origin
-        self.move(px + x - sx, py + y - sy)
         dx = x - self.drag_start[0]
         dy = y - self.drag_start[1]
         self.drag_last = (x, y)
+        if self.look_direction_enabled:
+            self.look_direction = look_direction_cell(x - sx, y - sy)
+            self.queue_draw()
+            return True
+        self.move(px + x - sx, py + y - sy)
         # Vertical/sub-threshold drag returns "idle" and is deliberately not
         # applied: a mid-drag vertical move preserves the last horizontal gait,
         # and a vertical-only drag falls back to the underlying idle/task
@@ -624,6 +638,7 @@ class PetWindow(Gtk.Window):
         self.drag_last = None
         self.drag_origin = None
         self.drag_animation = None
+        self.look_direction = None
         self.state.expire()
         self.refresh(reset_animation=True)
         # Re-anchor motion controller to the drag-end window position so

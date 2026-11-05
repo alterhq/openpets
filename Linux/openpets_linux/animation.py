@@ -20,6 +20,7 @@ Public contract (for the UI/geometry reviewer):
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Optional, Tuple
 
@@ -104,6 +105,20 @@ def drag_animation(
     if direction in DIRECTION_ANIMATIONS:
         return DIRECTION_ANIMATIONS[direction]
     return "idle"
+
+
+def look_direction_index(dx: float, dy: float) -> int:
+    """Map a screen-coordinate drag vector to 16 clockwise poses (up is 0)."""
+    if dx == 0 and dy == 0:
+        return 0
+    angle = math.atan2(dx, -dy) % (2 * math.pi)
+    return int(math.floor(angle * 16 / (2 * math.pi) + 0.5)) % 16
+
+
+def look_direction_cell(dx: float, dy: float) -> tuple[int, int]:
+    """Return the v2 atlas (row, column) for a drag vector."""
+    index = look_direction_index(dx, dy)
+    return 9 + index // 8, index % 8
 
 
 class IdlePicker:
