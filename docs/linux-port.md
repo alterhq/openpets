@@ -20,7 +20,9 @@ unchanged. Docker is for development/testing, never required to run the pet.
   without jumping), and **Free roam** (random diagonal/horizontal waypoints
   inside the current monitor workarea, never straight vertical). Mutually
   exclusive, persisted in `config.json` as `motionMode`. Dragging temporarily
-  pauses autonomous movement and resumes safely on release.
+  pauses autonomous movement and resumes safely on release. Autonomous motion
+  also pauses while any notification thread is running, waiting, or in review,
+  and resumes when all active threads reach a terminal state.
 - Threaded notifications, TTL, bounded in-memory history and details window;
   HTTP(S) buttons open only on an explicit click, never shell/command/file URLs.
 - Optional official-SDK MCP HTTP/stdio service and OpenCode V2 config generator.

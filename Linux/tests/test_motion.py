@@ -116,6 +116,47 @@ class TestMotionControllerDefaults(unittest.TestCase):
         self.assertFalse(mc.is_paused())
 
 
+class TestTaskPause(unittest.TestCase):
+    def setUp(self):
+        self.clock = _FixedClock(1000.0)
+        self.mc = MotionController(clock=self.clock, rng=random.Random(1))
+        self.mc.set_size(100, 100)
+        self.mc.set_workarea((0, 0, 800, 600))
+        self.mc.set_mode(MODE_FOLLOW)
+        self.mc.set_cursor(500, 400)
+
+    def test_task_pause_prevents_motion_and_resume_reanchors(self):
+        self.mc.set_task_active(True)
+        self.clock.advance(20)
+        self.assertIsNone(self.mc.tick())
+        self.assertTrue(self.mc.is_paused())
+        self.assertFalse(self.mc.is_moving())
+
+        self.mc.set_task_active(False)
+        self.assertFalse(self.mc.is_paused())
+        self.assertEqual(self.mc.tick()[0], (0, 0))
+        self.clock.advance(0.05)
+        self.assertIsNotNone(self.mc.tick())
+
+    def test_task_and_drag_pauses_are_independent(self):
+        self.mc.set_task_active(True)
+        self.mc.pause()
+        self.mc.set_task_active(False)
+        self.assertTrue(self.mc.is_paused())
+        self.assertIsNone(self.mc.tick())
+
+        self.mc.resume()
+        self.assertFalse(self.mc.is_paused())
+        self.clock.advance(0.05)
+        self.assertIsNotNone(self.mc.tick())
+
+    def test_task_completion_does_not_mark_off_mode_as_moving(self):
+        controller = MotionController(clock=self.clock)
+        controller.set_task_active(True)
+        controller.set_task_active(False)
+        self.assertFalse(controller.is_moving())
+
+
 class TestSetMode(unittest.TestCase):
     def setUp(self):
         self.clock = _FixedClock(1000.0)

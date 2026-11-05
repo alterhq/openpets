@@ -18,7 +18,7 @@ gi.require_foreign("cairo")
 import cairo
 from gi.repository import Gdk, GLib, Gtk
 
-from .core import ANIMATIONS, FINITE_STATUS_ANIMATIONS, State
+from .core import ANIMATIONS, FINITE_STATUS_ANIMATIONS, State, has_active_task
 from .ipc import bind_socket, cleanup_socket
 from .pet import load_atlas, sprite_version
 from .settings import Settings
@@ -130,6 +130,7 @@ class PetWindow(Gtk.Window):
         self.collapsed_message_preview_seconds = int(round(max(1, min(60, float(preview_seconds)))))
         self.unread_message_count = 0
         self._known_message_ids = set()
+        self._task_motion_frozen = False
         # thread_id -> notification with an independent expiry. Ordered order
         # is display order: older previews above, newest/update at the bottom.
         self.preview_messages = OrderedDict()
@@ -764,6 +765,10 @@ class PetWindow(Gtk.Window):
                 self.cycles_remaining = None
             self.schedule_frame()
         self.message_rows = list(self.state.messages.values())[-3:]
+        task_active = has_active_task(self.state.messages)
+        if task_active != self._task_motion_frozen:
+            self._task_motion_frozen = task_active
+            self.motion.set_task_active(task_active)
         current_ids = {str(message.get("threadId", "")) for message in self.message_rows}
         if self.appearance.get("messagesCollapsed"):
             self.unread_message_count = min(

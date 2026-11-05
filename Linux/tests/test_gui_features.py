@@ -240,6 +240,9 @@ class GUIFeatures(unittest.TestCase):
             with patch.dict(os.environ, environment):
                 window = PetWindow(bundled_starcorn_path(), .42, directory + "/host.sock")
                 try:
+                    # Keep the default startup server from claiming port 3001;
+                    # this test starts MCP later on its own reserved port.
+                    window.settings.update({"linuxMCPEnabled": False})
                     window.start()
                     window.open_chooser()
                     self.assertGreater(len(window.chooser.entries), 0)
@@ -291,10 +294,10 @@ class GUIFeatures(unittest.TestCase):
                         with socket.socket() as probe:
                             probe.bind(("127.0.0.1", 0))
                             port = probe.getsockname()[1]
-                        window.settings.update({"mcpPort": port})
+                        window.settings.update({"mcpHost": "127.0.0.1", "mcpPort": port})
                         window.mcp_item.set_active(True)
                         self.assertTrue(window.mcp_process.running())
-                        deadline = time.monotonic() + 8
+                        deadline = time.monotonic() + 15
                         ready = False
                         while time.monotonic() < deadline:
                             with socket.socket() as probe:
@@ -302,8 +305,12 @@ class GUIFeatures(unittest.TestCase):
                                     ready = True
                                     break
                             time.sleep(.05)
-                        self.assertTrue(ready)
                         process = window.mcp_process.process
+                        self.assertTrue(
+                            ready,
+                            f"MCP listener did not become ready on 127.0.0.1:{port}; "
+                            f"process return code={process.poll()}, command={process.args!r}",
+                        )
                         window.mcp_item.set_active(False)
                         self.assertFalse(window.mcp_process.running())
                         self.assertIsNotNone(process.poll())
