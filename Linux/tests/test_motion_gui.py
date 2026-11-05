@@ -66,6 +66,38 @@ class MotionGUITests(unittest.TestCase):
         self.assertIn("Movement: Follow cursor", labels)
         self.assertIn("Movement: Free roam", labels)
 
+    def test_active_task_freezes_autonomous_motion_until_done(self):
+        from openpets_linux.motion import MODE_FREE_ROAM
+
+        window = self.make_window()
+        window.motion.set_mode(MODE_FREE_ROAM)
+        window.state.apply({
+            "type": "notify",
+            "notification": {"title": "Build", "status": "running", "threadId": "build"},
+        })
+        window.refresh()
+        self.assertTrue(window.motion.is_paused())
+        self.assertIsNone(window.motion.tick())
+
+        # A second active task keeps motion frozen after the first completes.
+        window.state.apply({
+            "type": "notify",
+            "notification": {"title": "Review", "status": "review", "threadId": "review"},
+        })
+        window.state.apply({
+            "type": "notify",
+            "notification": {"title": "Build", "status": "done", "threadId": "build"},
+        })
+        window.refresh()
+        self.assertTrue(window.motion.is_paused())
+
+        window.state.apply({
+            "type": "notify",
+            "notification": {"title": "Review", "status": "done", "threadId": "review"},
+        })
+        window.refresh()
+        self.assertFalse(window.motion.is_paused())
+
     def test_default_mode_is_off(self):
         window = self.make_window()
         self.assertTrue(window.motion_off_item.get_active())

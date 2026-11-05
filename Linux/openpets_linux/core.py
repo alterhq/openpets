@@ -26,6 +26,7 @@ __all__ = [
     "ANIMATION_ALIASES",
     "STATUS_ANIMATION",
     "FINITE_STATUS_ANIMATIONS",
+    "has_active_task",
     "DEFAULT_SCALE",
     "DEFAULT_MESSAGE_AREA_HEIGHT",
     "MAX_COMMAND_SIZE",
@@ -101,6 +102,24 @@ FINITE_STATUS_ANIMATIONS: frozenset[str] = frozenset({
     "complete",
     "committed",
 })
+
+# Notifications in these states mean the task is still underway. The pet host
+# uses the latest status for each thread to freeze autonomous movement until
+# every active task reaches a terminal status (for example, done or failed).
+ACTIVE_TASK_STATUSES: frozenset[str] = frozenset({
+    "running", "task", "working", "waiting", "queued", "pending",
+    "review", "reviewing",
+})
+
+
+def has_active_task(messages: Any) -> bool:
+    """Return whether any thread in a message mapping is still in progress."""
+    items = messages.values() if isinstance(messages, dict) else messages
+    return any(
+        isinstance(message, dict)
+        and str(message.get("status", "")).strip().lower() in ACTIVE_TASK_STATUSES
+        for message in items
+    )
 
 DEFAULT_SCALE = 0.42
 DEFAULT_MESSAGE_AREA_HEIGHT = 56

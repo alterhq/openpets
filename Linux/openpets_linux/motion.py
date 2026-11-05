@@ -305,6 +305,7 @@ class MotionController:
         self.cursor: Optional[Tuple[float, float]] = None
         self.state: MotionState = MotionState(mode=MODE_OFF)
         self._paused_by_drag: bool = False
+        self._paused_by_task: bool = False
 
     # -- configuration -------------------------------------------------
 
@@ -315,6 +316,7 @@ class MotionController:
         if mode != self.mode:
             self.mode = mode
             self.state = MotionState(mode=mode)
+            self.state.paused = self._paused_by_drag or self._paused_by_task
             self.state.last_position = self.position
             if mode == MODE_FOLLOW:
                 # Start moving toward the cursor on the next tick.
@@ -366,7 +368,28 @@ class MotionController:
         step uses a normal single-tick delta.
         """
         self._paused_by_drag = False
-        self.state.paused = False
+        self.state.paused = self._paused_by_task
+        self.state.last_position = self.position
+        if self.mode == MODE_FREE_ROAM and self.state.waypoint is None:
+            self._start_roam_walk()
+        self.state.settled = False
+        self.state.moving_since_ms = self._now_ms()
+
+    def set_task_active(self, active: bool) -> None:
+        """Freeze autonomous movement while at least one task is in progress."""
+        active = bool(active)
+        if active == self._paused_by_task:
+            return
+        self._paused_by_task = active
+        self.state.paused = self._paused_by_drag or self._paused_by_task
+        if active:
+            self.state.settled = True
+            return
+        if self._paused_by_drag or self.mode == MODE_OFF:
+            self.state.settled = True
+            return
+        # Re-anchor timing so the first step after a long task uses a normal
+        # delta instead of trying to catch up for the entire paused duration.
         self.state.last_position = self.position
         if self.mode == MODE_FREE_ROAM and self.state.waypoint is None:
             self._start_roam_walk()
@@ -403,6 +426,7 @@ class MotionController:
         if (
             self.mode == MODE_OFF
             or self._paused_by_drag
+            or self._paused_by_task
             or self.workarea is None
             or self.size == (0, 0)
         ):
@@ -605,7 +629,7 @@ class MotionController:
         return self.state.settled
 
     def is_moving(self) -> bool:
-        return not self.state.settled and not self._paused_by_drag
+        return not self.state.settled and not self._paused_by_drag and not self._paused_by_task
 
     def is_paused(self) -> bool:
-        return self._paused_by_drag
+        return self._paused_by_drag or self._paused_by_task
