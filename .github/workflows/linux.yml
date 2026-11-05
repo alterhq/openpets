@@ -1,0 +1,89 @@
+name: Linux
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Debian package version (semver, e.g. 1.2.3). Default: 0.1.0"
+        required: false
+        default: "0.1.0"
+
+# Read-only permissions: this workflow builds, tests, and uploads build
+# artifacts only. It never publishes a release and requires no credentials.
+# A separate manual tag-based release job can be added later once publishing
+# is verified; initial CI output is artifact-only, not auto-published.
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies (CI runner only)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3 \
+            python3-gi \
+            python3-gi-cairo \
+            gir1.2-gtk-3.0 \
+            gir1.2-ayatanaappindicator3-0.1 \
+            webp-pixbuf-loader \
+            python3-venv \
+            xvfb xauth
+
+      - name: Install optional MCP SDK in a private test environment
+        run: |
+          /usr/bin/python3 -m venv --system-site-packages "$RUNNER_TEMP/openpets-mcp"
+          "$RUNNER_TEMP/openpets-mcp/bin/python" -m pip install --only-binary=:all: -r Linux/requirements-mcp.txt
+
+      - name: Check Python version
+        run: |
+          /usr/bin/python3 - <<'PY'
+          import sys
+          if sys.version_info < (3, 10):
+              raise SystemExit("python3 >= 3.10 is required")
+          print(f"python3 {sys.version.split()[0]} OK")
+          PY
+
+      - name: Run unit tests
+        env:
+          PYTHONPATH: "${{ github.workspace }}/Linux"
+        run: |
+          "$RUNNER_TEMP/openpets-mcp/bin/python" -m unittest discover -s Linux/tests -v
+
+      - name: GTK smoke test
+        env:
+          PYTHONPATH: "Linux"
+        run: |
+          xvfb-run -a "$RUNNER_TEMP/openpets-mcp/bin/python" -m unittest discover -s Linux/tests -p 'test_*integration.py' -v
+          xvfb-run -a "$RUNNER_TEMP/openpets-mcp/bin/python" -m unittest discover -s Linux/tests -p test_gui_features.py -v
+          xvfb-run -a "$RUNNER_TEMP/openpets-mcp/bin/python" -m openpets_linux --smoke-test
+
+      - name: Build .deb package
+        env:
+          PACKAGE_VERSION: ${{ github.event.inputs.version || '0.1.0' }}
+        run: |
+          bash scripts/package-linux.sh "$PACKAGE_VERSION" "$RUNNER_TEMP/linux-debs"
+
+      - name: Inspect .deb package
+        run: |
+          shopt -s nullglob
+          debs=("$RUNNER_TEMP/linux-debs"/openpets_*_all.deb)
+          test "${#debs[@]}" -eq 1
+          dpkg-deb -I "${debs[0]}"
+          dpkg-deb --contents "${debs[0]}"
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openpets-linux-deb
+          path: ${{ runner.temp }}/linux-debs/*.deb
+          retention-days: 30

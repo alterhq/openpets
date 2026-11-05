@@ -6,3 +6,7 @@ DerivedData/
 *.xcuserstate
 *.d
 *.dia
+
+# Pet bundles (user-installed pets, do not commit)
+*.codex/pets/
+.pets/

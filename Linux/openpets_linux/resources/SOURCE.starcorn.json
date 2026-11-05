@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/alterhq/OpenPetsKit",
+  "tag": "v0.2.1",
+  "revision": "83497ed34d1831dd453130af77552bfecaef264b",
+  "sourceDirectory": "Sources/OpenPetsKit/Resources/Pets/starcorn",
+  "license": "MIT; see LICENSE.starcorn",
+  "sha256": {
+    "pet.json": "fbd6f8832081b1b2208038c29ed98cdea8102f2a0f9b48f21dc6599429a621d5",
+    "spritesheet.webp": "d2d91b5339bc46662feddbab643e4fb92278de18281859fb37fcf77cc2a65d66"
+  }
+}
