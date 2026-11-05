@@ -603,7 +603,7 @@ class TestRendering(unittest.TestCase):
 
     def test_chip_text_is_horizontally_centered(self):
         layout = compute_layout(WIDTH, CELL_W, CELL_H,
-                                [_surface(state="warning", label="Codex", value="5h 58%")])
+                                [_surface(state="warning", label="A", value="1")])
         surface, context = _blank_surface(layout.width, layout.total_height)
         draw_plugin_chips(context, layout)
         chip = layout.chip_rects[0]
