@@ -1,5 +1,6 @@
 """Optional SDK environment and owned MCP HTTP process lifecycle."""
 
+import errno
 import importlib.util
 import os
 from pathlib import Path
@@ -87,8 +88,18 @@ class MCPProcess:
         with socket.socket(family, socket.SOCK_STREAM) as probe:
             try:
                 probe.bind((host, port))
-            except OSError:
-                raise RuntimeError("MCP port is already in use. Stop the other listener or choose another mcpPort.") from None
+            except OSError as error:
+                if error.errno == errno.EADDRINUSE:
+                    raise RuntimeError(
+                        f"MCP port {port} on {host} is already in use. Find its owner with "
+                        f"`ss -ltnp 'sport = :{port}'`. Stop that listener, or set `mcpPort` "
+                        "to an unused port in OpenPets settings and update the MCP client URL."
+                    ) from None
+                detail = error.strerror or str(error)
+                raise RuntimeError(
+                    f"Cannot check MCP port {port} on {host}: {detail}. "
+                    "Check the bind host and local permissions."
+                ) from None
         self.process = subprocess.Popen([
             mcp_python(), "-m", "openpets_linux", "mcp", "--transport", "streamable-http",
             "--host", host, "--port", str(port), "--endpoint", endpoint, "--socket", socket_path,
