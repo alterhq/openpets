@@ -41,7 +41,14 @@ from .motion import (
     is_valid_mode,
 )
 
-from .overlay import compute_layout, draw_overlay, input_rectangles, hit_test
+from .overlay import (
+    MESSAGE_MAX_WIDTH,
+    MESSAGE_PAD_X,
+    compute_layout,
+    draw_overlay,
+    input_rectangles,
+    hit_test,
+)
 
 # OpenPetsKit v0.2.1 PetAnimation.swift (MIT), not a fixed high-FPS redraw loop.
 # Timing data now lives in the pure :mod:`openpets_linux.animation` module and is
@@ -57,6 +64,15 @@ class PetWindow(Gtk.Window):
         self.pet_directory = Path(pet_directory).resolve()
         self.pet_id = self.identifier(self.pet_directory)
         self.scale = scale
+        saved_display = self.settings.read().get("display", {})
+        if not isinstance(saved_display, dict):
+            saved_display = {}
+        self.message_bubble_width = self._bounded_display_value(
+            saved_display.get("messageBubbleWidth"), MESSAGE_MAX_WIDTH, 120, 600, integer=True
+        )
+        self.message_font_size = self._bounded_display_value(
+            saved_display.get("messageFontSize"), 10.0, 6, 24
+        )
         self.history = NotificationHistory()
         self.notification_center = None
         self.chooser = None
@@ -109,8 +125,12 @@ class PetWindow(Gtk.Window):
         if visual is not None:
             self.set_visual(visual)
         self.composited = screen.is_composited()
-        self.width = max(360, self.cell_width)
-        self.layout = compute_layout(self.width, self.cell_width, self.cell_height)
+        self.width = max(360, self.cell_width, self.message_bubble_width + 2 * MESSAGE_PAD_X)
+        self.layout = compute_layout(
+            self.width, self.cell_width, self.cell_height,
+            message_max_width=self.message_bubble_width,
+            message_font_size=self.message_font_size,
+        )
         self.height = self.layout.total_height
         self.set_default_size(self.width, self.height)
         self.add_events(
@@ -161,6 +181,7 @@ class PetWindow(Gtk.Window):
         self.plugins = PluginController(self, self.settings, lambda: self.refresh())
         for label, callback in (("Appearance settings…", self.open_appearance_settings),
                                 ("Choose pet…", self.open_chooser),
+                                ("Display settings…", self.open_display_settings),
                                 ("OpenCode setup…", self.open_onboarding),
                                 ("Messages / actions…", self.open_notifications)):
             item = Gtk.MenuItem(label=label)
@@ -184,6 +205,73 @@ class PetWindow(Gtk.Window):
         except (OSError, ValueError, RecursionError):
             pass
         return Path(directory).name[:128]
+
+    @staticmethod
+    def _bounded_display_value(value, default, minimum, maximum, integer=False):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return default
+        try:
+            if not math.isfinite(value):
+                return default
+        except OverflowError:
+            return default
+        value = max(minimum, min(maximum, value))
+        return int(round(value)) if integer else float(value)
+
+    def open_display_settings(self):
+        dialog = Gtk.Dialog(title="Display settings", transient_for=self,
+                            flags=Gtk.DialogFlags.MODAL)
+        dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Apply", Gtk.ResponseType.OK)
+        grid = Gtk.Grid(column_spacing=12, row_spacing=12, margin=16)
+        dialog.get_content_area().add(grid)
+        controls = (
+            ("Pet size", self.scale, 0.2, 2.0, 0.05, 2),
+            ("Message bubble width", self.message_bubble_width, 120, 600, 10, 0),
+            ("Message font size", self.message_font_size, 6, 24, 1, 0),
+        )
+        scales = []
+        for row, (label, value, minimum, maximum, step, digits) in enumerate(controls):
+            text = Gtk.Label(label=label, xalign=0)
+            scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, minimum, maximum, step)
+            scale.set_digits(digits)
+            scale.set_value(value)
+            scale.set_hexpand(True)
+            scale.set_size_request(260, -1)
+            grid.attach(text, 0, row, 1, 1)
+            grid.attach(scale, 1, row, 1, 1)
+            scales.append(scale)
+        dialog.show_all()
+        response = dialog.run()
+        values = [scale.get_value() for scale in scales]
+        dialog.destroy()
+        if response != Gtk.ResponseType.OK:
+            return
+        try:
+            self.apply_display_settings(*values)
+        except (OSError, ValueError, RuntimeError) as error:
+            self.plugins.show_error(f"Could not apply display settings: {error}")
+
+    def apply_display_settings(self, pet_scale, bubble_width, font_size):
+        pet_scale = self._bounded_display_value(pet_scale, self.scale, 0.2, 2.0)
+        bubble_width = self._bounded_display_value(bubble_width, self.message_bubble_width,
+                                                  120, 600, integer=True)
+        font_size = self._bounded_display_value(font_size, self.message_font_size, 6, 24)
+        atlas, cell_width, cell_height = load_atlas(self.pet_directory, pet_scale)
+        self.settings.update({"display": {
+            "scale": pet_scale,
+            "messageBubbleWidth": bubble_width,
+            "messageFontSize": font_size,
+        }})
+        self.scale = pet_scale
+        self.atlas, self.cell_width, self.cell_height = atlas, cell_width, cell_height
+        self.message_bubble_width = bubble_width
+        self.message_font_size = font_size
+        self.width = max(360, self.cell_width,
+                         self.message_bubble_width + 2 * MESSAGE_PAD_X)
+        self.relayout()
+        self.update_input_shape()
+        self.queue_draw()
 
     def start(self):
         if "X11" not in self.get_display().__gtype__.name:
@@ -268,7 +356,8 @@ class PetWindow(Gtk.Window):
         directory = self.library.activate(pet_id)
         self.pet_directory, self.pet_id = directory, self.identifier(directory)
         self.atlas, self.cell_width, self.cell_height = atlas, width, height
-        self.width = max(360, width)
+        self.width = max(360, width,
+                         self.message_bubble_width + 2 * MESSAGE_PAD_X)
         self.relayout()
         self.restore_position()
         # Re-bind the motion controller to the restored geometry so a pet
@@ -540,7 +629,9 @@ class PetWindow(Gtk.Window):
                                      message_opacity=self.appearance["messageOpacity"],
                                      border_radius=self.appearance["borderRadius"],
                                      messages_collapsed=self.appearance["messagesCollapsed"],
-                                     unread_count=self.unread_message_count)
+                                     unread_count=self.unread_message_count,
+                                     message_max_width=self.message_bubble_width,
+                                     message_font_size=self.message_font_size)
         if self.height != self.layout.total_height or previous_width != self.width:
             x, y = self.get_position()
             # Preserve sprite screen anchor when content changes above/below

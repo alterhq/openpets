@@ -520,7 +520,8 @@ class TestLoadConfig(unittest.TestCase):
         )
         self.assertEqual(
             config["display"],
-            {"scale": DEFAULT_SCALE, "messageAreaHeight": DEFAULT_MESSAGE_AREA_HEIGHT},
+            {"scale": DEFAULT_SCALE, "messageAreaHeight": DEFAULT_MESSAGE_AREA_HEIGHT,
+             "messageBubbleWidth": 240, "messageFontSize": 10.0},
         )
 
     def test_defaults_do_not_write_file(self):
@@ -545,7 +546,8 @@ class TestLoadConfig(unittest.TestCase):
             config = load_config(path)
             self.assertEqual(config["socketPath"], "/tmp/custom.sock")
             self.assertEqual(
-                config["display"], {"scale": 0.84, "messageAreaHeight": 112}
+                config["display"], {"scale": 0.84, "messageAreaHeight": 112,
+                                     "messageBubbleWidth": 240, "messageFontSize": 10.0}
             )
         finally:
             os.remove(path)

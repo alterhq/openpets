@@ -38,7 +38,7 @@ Add the recommended assistant instructions so the assistant uses the desktop pet
 - Show task progress, completion, review, waiting, and failure states through a visible desktop companion.
 - Let multiple local tools share one pet instead of each app owning a separate status UI.
 - Send notifications and animations from an MCP client, a Swift app, or CLI scripts.
-- Run the bundled Starcorn pet or install custom Codex Pets using an 8x9 sprite atlas.
+- Run the bundled Starcorn pet; the Linux GTK host also supports custom Codex Pet v1 8x9 and v2 8x11 atlases.
 - Define plugin surfaces through host-owned pet-matched cloud hotspots.
 - Use action URLs on notifications for lightweight follow-up flows.
 
@@ -193,6 +193,7 @@ Settings:
 
 - `display.scale`: Sprite display scale.
 - `display.messageAreaHeight`: Reserved height for the message bubble area.
+- Linux GTK also persists `display.messageBubbleWidth` and `display.messageFontSize`; adjust them from **Display settings…** in the pet menu.
 - `socketPath`: Unix socket used by the CLI and pet host.
 - `mcpHost`: HTTP bind host for the MCP server.
 - `mcpPort`: HTTP port for the MCP server.

@@ -8,6 +8,9 @@ unchanged. Docker is for development/testing, never required to run the pet.
 
 - Bundled Starcorn from OpenPetsKit v0.2.1, with its MIT notice; no asset
   downloads on launch. `run --pet PATH` remains available for local bundles.
+  Custom Codex pet atlases support v1 (8x9) and v2 (8x11); v2's two extra
+  look-direction rows are accepted while the nine standard animation rows are
+  played by the current host.
 - Pet chooser with preview, local/XDG discovery, persistent active pet and
   per-pet position; restored positions are clamped to a current monitor.
 - Frame-timed sprites, drag, tray menu, outside-rectangle click-through.
@@ -50,6 +53,14 @@ Background blur is compositor-owned: enable it in a compatible compositor such
 as Picom (`blur-background` for transparent ARGB windows). OpenPets reports that
 setup is needed, but cannot detect the compositor's active blur rules reliably
 or configure them automatically.
+Use **Display settings…** to adjust pet scale, message-bubble width and message
+font size; settings persist in `config.json` and apply immediately.
+
+For a Codex Pets bundle such as Cute Yaya, install it with
+`npx codex-pets add cute-yaya`, then choose **Choose pet…** → **小娅娅** (or
+run `openpets pets select cute-yaya`). Version 2 bundles use an 8-column by
+11-row atlas; the current Linux host plays the nine standard animation rows and
+accepts the two additional look-direction rows without rejecting the bundle.
 Use **Plugins** to explicitly enable providers. For quota, the confirmation
 explains credential access/network use. No plugin is enabled by default.
 

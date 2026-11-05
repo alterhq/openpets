@@ -49,6 +49,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "blurBackground": False,
         "borderRadius": 14.0,
         "messagesCollapsed": False,
+        "messageBubbleWidth": 240,
+        "messageFontSize": 10.0,
     },
 }
 

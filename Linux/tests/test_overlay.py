@@ -283,6 +283,16 @@ class TestComputeLayoutMessages(unittest.TestCase):
         self.assertIsNotNone(rect)
         self.assertEqual(hit_test(layout, rect.x + 2, rect.y + 2).kind, "message-collapse")
 
+    def test_message_width_and_font_size_are_configurable(self):
+        message = _message("thread", "A title", "Message body")
+        default = compute_layout(WIDTH, CELL_W, CELL_H, (), [message])
+        adjusted = compute_layout(500, CELL_W, CELL_H, (), [message], 420, 16)
+        self.assertEqual(default.message_rects[0].rect.width, MESSAGE_MAX_WIDTH)
+        self.assertEqual(adjusted.message_rects[0].rect.width, 420)
+        self.assertEqual(adjusted.message_font_size, 16)
+        self.assertGreater(adjusted.message_rects[0].rect.height,
+                           default.message_rects[0].rect.height)
+
 
 class TestHitTest(unittest.TestCase):
     def setUp(self):

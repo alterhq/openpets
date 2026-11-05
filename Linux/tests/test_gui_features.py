@@ -19,6 +19,8 @@ class GUIFeatures(unittest.TestCase):
         from openpets_linux.ui import PetWindow
 
         with tempfile.TemporaryDirectory(prefix="openpets-appearance-") as directory:
+            # The adjacent pet-size controls are part of the independent
+            # display feature already merged into main.
             environment = {"HOME": directory, "XDG_CONFIG_HOME": directory + "/config",
                            "XDG_DATA_HOME": directory + "/data",
                            "DBUS_SESSION_BUS_ADDRESS": ""}
@@ -47,6 +49,14 @@ class GUIFeatures(unittest.TestCase):
                     window.toggle_messages_collapsed(False)
                     self.assertIsNotNone(window.layout.message_toggle_rect)
                     self.assertEqual(window.unread_message_count, 0)
+                    window.apply_display_settings(.6, 360, 14)
+                    display = window.settings.read()["display"]
+                    self.assertEqual(display["scale"], .6)
+                    self.assertEqual(display["messageBubbleWidth"], 360)
+                    self.assertEqual(display["messageFontSize"], 14)
+                    self.assertEqual(window.message_bubble_width, 360)
+                    self.assertEqual(window.layout.message_font_size, 14)
+                    self.assertGreater(window.cell_width, 80)
                 finally:
                     window.cleanup()
 
