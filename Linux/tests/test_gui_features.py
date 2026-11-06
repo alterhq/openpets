@@ -332,7 +332,8 @@ class GUIFeatures(unittest.TestCase):
                             with socket.socket() as probe:
                                 if probe.connect_ex(("127.0.0.1", port)) == 0:
                                     ready = True
-                                    break
+                            if ready and window._mcp_indicator_state == "active":
+                                break
                             time.sleep(.05)
                         process = window.mcp_process.process
                         self.assertEqual(window._mcp_indicator_state, "active")
