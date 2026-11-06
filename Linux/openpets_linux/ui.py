@@ -29,7 +29,7 @@ from .chat_bubble import (
     CHAT_BUBBLE_CORNER_RADIUS_PERCENT,
     CHAT_BUBBLE_TEXT_SIZE,
 )
-from .mcp_runtime import MCPProcess
+from .mcp_runtime import MCPPortBusy, MCPProcess
 from .animation import (
     ANIMATION_DURATIONS as DURATIONS,
     IDLE_INTERVAL_MAX_MS,
@@ -62,6 +62,9 @@ from .overlay import (
 )
 
 MESSAGE_TOGGLE_AUTO_HIDE_MS = 2500
+MCP_RETRY_INTERVAL_SECONDS = 2
+MCP_SETTINGS_DEFAULT_WIDTH = 500
+MCP_SETTINGS_SLIDER_WIDTH = 180
 
 
 def message_surfaces_for_layout(messages, previews):
@@ -248,6 +251,10 @@ class PetWindow(Gtk.Window):
         self.menu.append(self.motion_free_item)
         self.menu.show_all()
         self.indicator = None
+        self.mcp_retry_source = 0
+        self._mcp_requested = False
+        self._mcp_indicator_state = "off"
+        self._shutdown_requested = False
         from .plugin_ui import PluginController
         self.plugins = PluginController(self, self.settings, self._plugins_changed)
         for label, callback in (("Settings…", self.open_settings),
@@ -262,6 +269,7 @@ class PetWindow(Gtk.Window):
         self.menu.prepend(plugin_item)
         self.mcp_item = Gtk.CheckMenuItem(label="MCP server (loopback)")
         self.mcp_item.connect("toggled", self.on_mcp_toggle)
+        self._install_mcp_indicator_styles()
         self.menu.prepend(self.mcp_item)
         self.menu.show_all()
 
@@ -318,9 +326,10 @@ class PetWindow(Gtk.Window):
         """
         dialog = Gtk.Dialog(title="Settings", transient_for=self,
                             flags=Gtk.DialogFlags.MODAL)
+        dialog.set_default_size(MCP_SETTINGS_DEFAULT_WIDTH, -1)
         dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
         dialog.add_button("Apply", Gtk.ResponseType.OK)
-        grid = Gtk.Grid(column_spacing=12, row_spacing=12, margin=16)
+        grid = Gtk.Grid(column_spacing=8, row_spacing=10, margin=12)
         dialog.get_content_area().add(grid)
 
         row = 0
@@ -346,7 +355,7 @@ class PetWindow(Gtk.Window):
             scale.set_digits(digits)
             scale.set_value(value)
             scale.set_hexpand(True)
-            scale.set_size_request(260, -1)
+            scale.set_size_request(MCP_SETTINGS_SLIDER_WIDTH, -1)
             grid.attach(text, 0, row, 1, 1)
             grid.attach(scale, 1, row, 1, 1)
             scales.append((key, scale))
@@ -793,24 +802,112 @@ class PetWindow(Gtk.Window):
             self.notification_center = NotificationCenter(self, self.history, self.dismiss_message)
         self.notification_center.present()
 
+    def _install_mcp_indicator_styles(self):
+        """Give the checked menu indicator distinct pending/active colors."""
+        self.mcp_css_provider = Gtk.CssProvider()
+        self.mcp_css_provider.load_from_data(b"""
+            menuitem.mcp-pending:checked check { color: #e6a700; }
+            menuitem.mcp-active:checked check { color: #28a745; }
+        """)
+        Gtk.StyleContext.add_provider_for_screen(
+            self.get_screen(), self.mcp_css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+        self.mcp_item.set_tooltip_text("MCP server is off")
+
+    def _set_mcp_indicator(self, state, detail=None):
+        style = self.mcp_item.get_style_context()
+        for css_class in ("mcp-pending", "mcp-active"):
+            style.remove_class(css_class)
+        self._mcp_indicator_state = state
+        if state == "pending":
+            style.add_class("mcp-pending")
+            label = "MCP server (waiting — retrying)"
+            tooltip = detail or "Waiting for the MCP port to be released; OpenPets will retry automatically."
+        elif state == "active":
+            style.add_class("mcp-active")
+            label = "MCP server (loopback)"
+            tooltip = detail or "MCP server is listening and ready."
+        else:
+            label = "MCP server (loopback)"
+            tooltip = detail or "MCP server is off"
+        self.mcp_item.set_label(label)
+        self.mcp_item.set_tooltip_text(tooltip)
+
+    def _cancel_mcp_retry(self):
+        if self.mcp_retry_source:
+            GLib.source_remove(self.mcp_retry_source)
+            self.mcp_retry_source = 0
+
+    def _schedule_mcp_retry(self):
+        if not self.mcp_retry_source and self._mcp_requested:
+            self.mcp_retry_source = GLib.timeout_add_seconds(
+                MCP_RETRY_INTERVAL_SECONDS, self._retry_mcp_start
+            )
+
+    def _fail_mcp_start(self, error):
+        self._cancel_mcp_retry()
+        self._mcp_requested = False
+        self.mcp_process.stop()
+        self._set_mcp_indicator("off")
+        self.mcp_item.handler_block_by_func(self.on_mcp_toggle)
+        self.mcp_item.set_active(False)
+        self.mcp_item.handler_unblock_by_func(self.on_mcp_toggle)
+        try:
+            self.settings.update({"linuxMCPEnabled": False})
+        except (OSError, ValueError):
+            pass
+        self.plugins.show_error(str(error))
+
+    def _attempt_mcp_start(self):
+        """Try once; return true while pending and false after success/failure."""
+        process = self.mcp_process.process
+        if process is not None and process.poll() is not None:
+            self._fail_mcp_start(RuntimeError(
+                f"MCP server exited during startup (code {process.returncode}). "
+                "Check the MCP SDK and server configuration."
+            ))
+            return False
+        try:
+            if not self.mcp_process.running():
+                self.mcp_process.start(self.socket_path, self.settings.read())
+        except MCPPortBusy as error:
+            self._set_mcp_indicator("pending", str(error))
+            return True
+        except (OSError, ValueError, RuntimeError) as error:
+            self._fail_mcp_start(error)
+            return False
+
+        if self.mcp_process.ready():
+            self._set_mcp_indicator("active")
+            return False
+        self._set_mcp_indicator("pending", "MCP server is starting; checking until its endpoint is ready.")
+        return True
+
+    def _retry_mcp_start(self):
+        self.mcp_retry_source = 0
+        if not self._mcp_requested or not self.mcp_item.get_active():
+            return GLib.SOURCE_REMOVE
+        if self._attempt_mcp_start():
+            self._schedule_mcp_retry()
+        return GLib.SOURCE_REMOVE
+
     def on_mcp_toggle(self, item):
         try:
             if item.get_active():
-                self.mcp_process.start(self.socket_path, self.settings.read())
+                self._mcp_requested = True
+                self._set_mcp_indicator("pending", "Starting the MCP server and checking for readiness.")
                 self.settings.update({"linuxMCPEnabled": True})
+                if self._attempt_mcp_start():
+                    self._schedule_mcp_retry()
             else:
+                self._mcp_requested = False
+                self._cancel_mcp_retry()
                 self.mcp_process.stop()
                 self.settings.update({"linuxMCPEnabled": False})
-        except (OSError, ValueError, RuntimeError) as error:
-            self.mcp_process.stop()
-            item.handler_block_by_func(self.on_mcp_toggle)
-            item.set_active(False)
-            item.handler_unblock_by_func(self.on_mcp_toggle)
-            try:
-                self.settings.update({"linuxMCPEnabled": False})
-            except (OSError, ValueError):
-                pass
-            self.plugins.show_error(str(error))
+                self._set_mcp_indicator("off")
+        except (OSError, ValueError) as error:
+            self._fail_mcp_start(error)
 
     def handle_command(self, command):
         if isinstance(command, dict):
@@ -820,7 +917,8 @@ class PetWindow(Gtk.Window):
                         "position": list(self.get_position()), "messages": list(self.state.messages.values())[-3:],
                         "messageCount": len(self.state.messages),
                         "historyCount": len(self.history.items()), "plugins": self.plugins.surfaces(),
-                        "mcpRunning": self.mcp_process.running()}
+                        "mcpRunning": self.mcp_process.ready(),
+                        "mcpPending": self._mcp_requested and self._mcp_indicator_state == "pending"}
             if kind == "showPet":
                 self.show_all()
                 return {"ok": True}
@@ -1478,13 +1576,27 @@ class PetWindow(Gtk.Window):
                 self.close_connection(fd)
         before = (self.state.animation, repr(self.state.messages))
         self.state.expire(now)
-        if self.mcp_item.get_active() and not self.mcp_process.running():
-            self.mcp_item.set_label("MCP server stopped — check port / SDK")
+        if self._mcp_requested and self._mcp_indicator_state == "active" and not self.mcp_process.ready():
+            process = self.mcp_process.process
+            if process is not None and process.poll() is not None:
+                self.mcp_process.process = None
+                self.mcp_process.host = None
+                self.mcp_process.port = None
+            self._set_mcp_indicator("pending", "MCP server is reconnecting; retrying automatically.")
+            self._schedule_mcp_retry()
         if before != (self.state.animation, repr(self.state.messages)):
             self.refresh()
         return GLib.SOURCE_CONTINUE
 
     def shutdown(self):
+        # Stop child services before leaving the GTK loop. Relying only on the
+        # run() finally block can leave MCP behind if shutdown is initiated by
+        # a menu/tray action while other GLib sources are still active.
+        if not self._shutdown_requested:
+            self._shutdown_requested = True
+            self._mcp_requested = False
+            self._cancel_mcp_retry()
+            self.mcp_process.stop()
         # Stop movement timers on shutdown.
         if self.motion_source:
             GLib.source_remove(self.motion_source)
@@ -1508,6 +1620,11 @@ class PetWindow(Gtk.Window):
             GLib.source_remove(source)
 
     def cleanup(self):
+        # Tear down the listener first so failures in unrelated UI/plugin
+        # cleanup cannot orphan the MCP child and keep its port occupied.
+        self._mcp_requested = False
+        self._cancel_mcp_retry()
+        self.mcp_process.stop()
         # Stop every GLib source first, before any teardown (socket close,
         # destroy, plugin teardown) can iterate the main loop and remove
         # sources under us, which would produce "Source ID not found" warnings.
@@ -1520,6 +1637,7 @@ class PetWindow(Gtk.Window):
         self._drop_source("listener_source")
         self._drop_source("preview_source")
         self._drop_source("chat_bubble_source")
+        self._drop_source("mcp_retry_source")
         self._drop_source("_toggle_hide_source")
         for source in list(getattr(self, "signal_sources", [])):
             if source:
@@ -1530,7 +1648,6 @@ class PetWindow(Gtk.Window):
 
         self.save_position()
         self.plugins.close()
-        self.mcp_process.stop()
         if self.listener is not None:
             self.listener.close()
             cleanup_socket(self.socket_path, self.socket_identity)

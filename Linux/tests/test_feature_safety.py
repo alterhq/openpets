@@ -66,17 +66,32 @@ class FeatureSafety(unittest.TestCase):
         validate_server("127.0.0.1", 3001, "/mcp")
 
     def test_gui_mcp_refuses_another_listeners_port(self):
-        from openpets_linux.mcp_runtime import MCPProcess
+        from openpets_linux.mcp_runtime import MCPPortBusy, MCPProcess
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             listener.listen(1)
             owned = MCPProcess()
             port = listener.getsockname()[1]
-            with self.assertRaisesRegex(RuntimeError, rf"port {port} on 127\.0\.0\.1 is already in use") as caught:
+            with self.assertRaisesRegex(MCPPortBusy, rf"port {port} on 127\.0\.0\.1 is already in use") as caught:
                 owned.start("/unused.sock", {"mcpPort": port})
             self.assertIsNone(owned.process)
-            self.assertIn(f"ss -ltnp 'sport = :{port}'", str(caught.exception))
-            self.assertIn("update the MCP client URL", str(caught.exception))
+            self.assertEqual(caught.exception.host, "127.0.0.1")
+            self.assertEqual(caught.exception.port, port)
+            self.assertIn("retry automatically", str(caught.exception))
+
+    def test_mcp_ready_requires_a_live_process_and_listening_port(self):
+        from types import SimpleNamespace
+        from openpets_linux.mcp_runtime import MCPProcess
+
+        process = MCPProcess()
+        self.assertFalse(process.ready())
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            process.process = SimpleNamespace(poll=lambda: None)
+            process.host, process.port = listener.getsockname()
+            self.assertTrue(process.ready())
+        self.assertFalse(process.ready())
 
     def test_gui_mcp_does_not_misreport_other_bind_errors_as_port_conflicts(self):
         from openpets_linux.mcp_runtime import MCPProcess

@@ -14,6 +14,28 @@ HAS_DISPLAY = bool(os.environ.get("DISPLAY")) and importlib.util.find_spec("gi")
 
 @unittest.skipUnless(HAS_DISPLAY, "GTK tests require DISPLAY (use Xvfb)")
 class GUIFeatures(unittest.TestCase):
+    def test_quit_stops_mcp_child_before_leaving_gtk(self):
+        from openpets_linux.library import bundled_starcorn_path
+        from openpets_linux.ui import PetWindow
+
+        with tempfile.TemporaryDirectory(prefix="openpets-quit-mcp-") as directory:
+            environment = {"HOME": directory, "XDG_CONFIG_HOME": directory + "/config",
+                           "XDG_DATA_HOME": directory + "/data",
+                           "DBUS_SESSION_BUS_ADDRESS": ""}
+            with patch.dict(os.environ, environment):
+                window = PetWindow(bundled_starcorn_path(), .42, directory + "/host.sock")
+                try:
+                    window.settings.update({"linuxMCPEnabled": False})
+                    window.start()
+                    window._mcp_requested = True
+                    with patch.object(window.mcp_process, "stop") as stop_mcp:
+                        window.shutdown()
+                    stop_mcp.assert_called_once_with()
+                    self.assertFalse(window._mcp_requested)
+                    self.assertEqual(window.mcp_retry_source, 0)
+                finally:
+                    window.cleanup()
+
     def test_settings_persist_and_apply_together(self):
         from openpets_linux.library import bundled_starcorn_path
         from openpets_linux.ui import PetWindow
@@ -291,21 +313,30 @@ class GUIFeatures(unittest.TestCase):
                         window.plugins.dialog.destroy()
                         window.plugins.set_enabled("battery", False)
                     if importlib.util.find_spec("mcp") is not None:
-                        with socket.socket() as probe:
-                            probe.bind(("127.0.0.1", 0))
-                            port = probe.getsockname()[1]
+                        probe = socket.socket()
+                        probe.bind(("127.0.0.1", 0))
+                        probe.listen(1)
+                        port = probe.getsockname()[1]
                         window.settings.update({"mcpHost": "127.0.0.1", "mcpPort": port})
                         window.mcp_item.set_active(True)
-                        self.assertTrue(window.mcp_process.running())
+                        self.assertTrue(window.mcp_item.get_active())
+                        self.assertEqual(window._mcp_indicator_state, "pending")
+                        self.assertIn("retry", window.mcp_item.get_tooltip_text().lower())
+                        self.assertEqual(window.mcp_item.get_label(), "MCP server (waiting — retrying)")
+                        probe.close()
                         deadline = time.monotonic() + 15
                         ready = False
                         while time.monotonic() < deadline:
+                            while GLib.MainContext.default().pending():
+                                GLib.MainContext.default().iteration(False)
                             with socket.socket() as probe:
                                 if probe.connect_ex(("127.0.0.1", port)) == 0:
                                     ready = True
                                     break
                             time.sleep(.05)
                         process = window.mcp_process.process
+                        self.assertEqual(window._mcp_indicator_state, "active")
+                        self.assertEqual(window.mcp_item.get_label(), "MCP server (loopback)")
                         self.assertTrue(
                             ready,
                             f"MCP listener did not become ready on 127.0.0.1:{port}; "

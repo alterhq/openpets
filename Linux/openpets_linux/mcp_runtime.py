@@ -73,9 +73,23 @@ def opencode_configuration(socket_path, transport="http", port=3001, endpoint="/
     return {"$schema": "https://opencode.ai/config.json", "mcp": {"servers": {"openpets": entry}}}
 
 
+class MCPPortBusy(RuntimeError):
+    """Retryable condition: another process currently owns the MCP endpoint."""
+
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        super().__init__(
+            f"MCP port {port} on {host} is already in use. OpenPets will retry "
+            "automatically when the port is available."
+        )
+
+
 class MCPProcess:
     def __init__(self):
         self.process = None
+        self.host = None
+        self.port = None
 
     def start(self, socket_path, config):
         if self.running():
@@ -90,11 +104,7 @@ class MCPProcess:
                 probe.bind((host, port))
             except OSError as error:
                 if error.errno == errno.EADDRINUSE:
-                    raise RuntimeError(
-                        f"MCP port {port} on {host} is already in use. Find its owner with "
-                        f"`ss -ltnp 'sport = :{port}'`. Stop that listener, or set `mcpPort` "
-                        "to an unused port in OpenPets settings and update the MCP client URL."
-                    ) from None
+                    raise MCPPortBusy(host, port) from None
                 detail = error.strerror or str(error)
                 raise RuntimeError(
                     f"Cannot check MCP port {port} on {host}: {detail}. "
@@ -104,12 +114,26 @@ class MCPProcess:
             mcp_python(), "-m", "openpets_linux", "mcp", "--transport", "streamable-http",
             "--host", host, "--port", str(port), "--endpoint", endpoint, "--socket", socket_path,
         ], env=child_environment(), cwd=module_root(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        self.host = host
+        self.port = port
 
     def running(self):
         return self.process is not None and self.process.poll() is None
 
+    def ready(self, timeout=0.15):
+        """Return true only once the child is alive and its TCP endpoint accepts connections."""
+        if not self.running() or self.host is None or self.port is None:
+            return False
+        try:
+            with socket.create_connection((self.host, self.port), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
     def stop(self):
         process, self.process = self.process, None
+        self.host = None
+        self.port = None
         if process is None or process.poll() is not None:
             return
         process.terminate()
