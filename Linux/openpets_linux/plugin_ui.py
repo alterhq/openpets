@@ -1,5 +1,6 @@
 """Opt-in plugin scheduling and GTK menu/details; no account access by default."""
 
+import logging
 import threading
 import time
 
@@ -11,6 +12,7 @@ from gi.repository import GLib, Gtk
 from . import plugins
 from .chat_bubble import ChatBubblePlugin
 
+logger = logging.getLogger(__name__)
 
 PROVIDERS = {"battery": ("Battery", plugins.read_battery),
              "claude": ("Claude Code quota", plugins.read_claude_usage),
@@ -165,6 +167,7 @@ class PluginController:
                 try:
                     results[name] = PROVIDERS[name][1]()
                 except Exception:
+                    logger.warning("quota provider refresh failed provider=%s", name, exc_info=True)
                     results[name] = {"id": name, "label": PROVIDERS[name][0],
                                      "value": "Unavailable", "state": "error",
                                      "details": ["Provider could not be read."]}

@@ -1,10 +1,13 @@
 """Small GTK3 pet chooser; selection is committed only after asset validation."""
 
+import logging
+
 import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
+logger = logging.getLogger(__name__)
 
 class PetChooser(Gtk.Dialog):
     def __init__(self, parent, library, select_callback):
@@ -52,6 +55,7 @@ class PetChooser(Gtk.Dialog):
             self.preview.set_from_pixbuf(frame)
             self.status.set_text(self.entries[index]["directory"])
         except Exception:
+            logger.warning("could not render pet chooser preview index=%s", index, exc_info=True)
             self.preview.clear()
             self.status.set_text("Cannot preview this pet. Check its manifest and spritesheet.")
 

@@ -2,11 +2,14 @@
 
 import errno
 import importlib.util
+import logging
 import os
 from pathlib import Path
 import subprocess
 import socket
 import sys
+
+logger = logging.getLogger(__name__)
 
 
 def module_root():
@@ -47,12 +50,14 @@ def setup_environment(directory=None):
 
 
 def run_mcp(socket_path, transport, host, port, endpoint):
+    logger.info("MCP process initializing transport=%s endpoint=%s", transport, endpoint)
     python = mcp_python()
     if importlib.util.find_spec("mcp") is None:
         if os.environ.get("OPENPETS_MCP_REEXEC") == "1":
             raise RuntimeError("Configured MCP Python does not contain the SDK")
         environment = child_environment()
         environment["OPENPETS_MCP_REEXEC"] = "1"
+        logger.info("re-executing MCP process with isolated interpreter=%s", python)
         os.chdir(module_root())
         os.execve(python, [python, "-m", "openpets_linux", "mcp", "--transport", transport,
                           "--host", host, "--port", str(port), "--endpoint", endpoint,
@@ -116,6 +121,8 @@ class MCPProcess:
         ], env=child_environment(), cwd=module_root(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         self.host = host
         self.port = port
+        logger.info("spawned MCP child pid=%s host=%s port=%s endpoint=%s",
+                    self.process.pid, host, port, endpoint)
 
     def running(self):
         return self.process is not None and self.process.poll() is None
@@ -136,9 +143,12 @@ class MCPProcess:
         self.port = None
         if process is None or process.poll() is not None:
             return
+        logger.info("stopping MCP child pid=%s", process.pid)
         process.terminate()
         try:
             process.wait(timeout=3)
         except subprocess.TimeoutExpired:
+            logger.warning("MCP child pid=%s did not stop in time; sending kill", process.pid)
             process.kill()
             process.wait(timeout=2)
+        logger.info("MCP child pid=%s stopped returncode=%s", process.pid, process.returncode)

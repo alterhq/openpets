@@ -3,6 +3,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import gi
@@ -35,6 +36,7 @@ from openpets_linux.overlay import (  # noqa: E402
 from openpets_linux.settings import DEFAULT_CONFIG  # noqa: E402
 from openpets_linux.ui import PetWindow  # noqa: E402
 from openpets_linux.ui import message_surfaces_for_layout  # noqa: E402
+from openpets_linux.chat_bubble_ui import ChatBubbleOverlay  # noqa: E402
 from openpets_linux import mcp_server  # noqa: E402
 from openpets_linux.overlay import _estimate_chat_bubble_size_cached  # noqa: E402
 
@@ -117,6 +119,73 @@ class ChatClassificationTests(unittest.TestCase):
         }})
         self.assertEqual(state.messages["chat-thread"]["kind"], "chat")
         self.assertTrue(has_active_task(state.messages))
+
+    def test_motion_remains_frozen_until_collapsed_preview_expires(self):
+        class Motion:
+            def __init__(self):
+                self.paused = False
+                self.updates = []
+
+            def set_task_active(self, active):
+                self.paused = active
+                self.updates.append(active)
+
+        motion = Motion()
+        window = SimpleNamespace(
+            state=SimpleNamespace(messages={"task": {"status": "done"}}),
+            appearance={"messagesCollapsed": True},
+            preview_messages={"task": {"expires_at": 10}},
+            chat_bubble_enabled=False,
+            plugins=SimpleNamespace(chat_bubble=None),
+            _task_motion_frozen=False,
+            motion=motion,
+        )
+        window._chat_bubble_queue_active = (
+            lambda: PetWindow._chat_bubble_queue_active(window)
+        )
+
+        PetWindow._sync_motion_task_state(window)
+        self.assertTrue(motion.paused)
+
+        window.preview_messages.clear()
+        PetWindow._sync_motion_task_state(window)
+        self.assertFalse(motion.paused)
+        self.assertEqual(motion.updates, [True, False])
+
+    def test_motion_remains_frozen_while_final_chat_bubble_is_current_or_pending(self):
+        class Motion:
+            def __init__(self):
+                self.paused = False
+
+            def set_task_active(self, active):
+                self.paused = active
+
+        motion = Motion()
+        queue = SimpleNamespace(current={"text": "done"}, pending_count=0)
+        window = SimpleNamespace(
+            state=SimpleNamespace(messages={"task": {"status": "done"}}),
+            appearance={"messagesCollapsed": False},
+            preview_messages={},
+            chat_bubble_enabled=True,
+            plugins=SimpleNamespace(chat_bubble=queue),
+            _task_motion_frozen=False,
+            motion=motion,
+        )
+        window._chat_bubble_queue_active = (
+            lambda: PetWindow._chat_bubble_queue_active(window)
+        )
+
+        PetWindow._sync_motion_task_state(window)
+        self.assertTrue(motion.paused)
+
+        queue.current = None
+        queue.pending_count = 1
+        PetWindow._sync_motion_task_state(window)
+        self.assertTrue(motion.paused)
+
+        queue.pending_count = 0
+        PetWindow._sync_motion_task_state(window)
+        self.assertFalse(motion.paused)
 
 
 class ChatBubbleQueueTests(unittest.TestCase):
@@ -294,6 +363,93 @@ class ChatBubbleGeometryTests(unittest.TestCase):
 
     def test_unicode_combining_marks_stay_with_their_base_character(self):
         self.assertEqual(list(_text_graphemes("e\u0301x")), ["e\u0301", "x"])
+
+    def test_overlay_movement_reuses_cached_raster(self):
+        import gi
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gtk
+
+        parent = Gtk.Window()
+        overlay = ChatBubbleOverlay(parent)
+        try:
+            overlay.set_bubble(
+                self.message, pet_x=300, pet_y=250, cell_width=140,
+                cell_height=100, workarea=(0, 0, 1920, 1080),
+                plugin_side="right",
+            )
+            rendered = overlay.render_count
+            original_surface = overlay.surface
+            overlay.move_with_pet(420, 330)
+            self.assertEqual(overlay.render_count, rendered)
+            self.assertIs(overlay.surface, original_surface)
+
+            overlay.set_bubble(
+                {**self.message, "text": "Changed content"},
+                pet_x=420, pet_y=330, cell_width=140,
+                cell_height=100, workarea=(0, 0, 1920, 1080),
+                plugin_side="right",
+            )
+            self.assertGreater(overlay.render_count, rendered)
+        finally:
+            overlay.destroy()
+            parent.destroy()
+
+    def test_expired_bubble_releases_cached_raster(self):
+        import gi
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gtk
+
+        parent = Gtk.Window()
+        overlay = ChatBubbleOverlay(parent)
+        try:
+            overlay.set_bubble(
+                self.message, pet_x=300, pet_y=250, cell_width=140,
+                cell_height=100, workarea=(0, 0, 1920, 1080),
+                plugin_side="right",
+            )
+            self.assertIsNotNone(overlay.surface)
+            overlay.set_bubble(
+                None, pet_x=0, pet_y=0, cell_width=0, cell_height=0,
+                workarea=None, plugin_side="right",
+            )
+            self.assertIsNone(overlay.surface)
+            self.assertIsNone(overlay.cache_key)
+        finally:
+            overlay.destroy()
+            parent.destroy()
+
+    def test_overlay_initial_window_is_large_enough_for_cached_surface(self):
+        import gi
+        gi.require_version("Gtk", "3.0")
+        from gi.repository import Gtk
+
+        parent = Gtk.Window()
+        overlay = ChatBubbleOverlay(parent)
+        try:
+            parent.show()
+            overlay.set_bubble(
+                self.message, pet_x=500, pet_y=300, cell_width=100,
+                cell_height=100, workarea=(0, 0, 1366, 768),
+                plugin_side="right",
+            )
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+            window_width, window_height = overlay.get_size()
+            self.assertGreaterEqual(window_width, overlay.surface.get_width())
+            self.assertGreaterEqual(window_height, overlay.surface.get_height())
+        finally:
+            overlay.destroy()
+            parent.destroy()
+
+    def test_pet_layout_size_is_independent_of_chat_bubble_text(self):
+        window_width = PetWindow._desired_width(
+            SimpleNamespace(cell_width=140, message_bubble_width=320)
+        )
+        long_text_width = PetWindow._desired_width(
+            SimpleNamespace(cell_width=140, message_bubble_width=320),
+            {**self.message, "text": self.message["text"] * 40},
+        )
+        self.assertEqual(window_width, long_text_width)
 
 
 if __name__ == "__main__":
