@@ -1,0 +1,9 @@
+# Dockerfile-specific ignore file, relative to the repository-root context.
+**
+!Linux/
+!Linux/**
+!scripts/
+!scripts/package-linux.sh
+!LICENSE
+**/__pycache__/
+**/*.pyc

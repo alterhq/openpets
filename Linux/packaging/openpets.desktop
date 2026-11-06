@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=OpenPets
+GenericName=Desktop Pet
+Comment=OpenPets desktop companion
+Exec=openpets
+Icon=face-smile
+Terminal=false
+Categories=Game;Utility;
+StartupNotify=false

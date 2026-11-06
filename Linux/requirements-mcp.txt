@@ -1,0 +1,9 @@
+# OpenPets Linux MCP server dependencies.
+#
+# Provisioned by the parent into a venv/Docker image after this file is
+# reviewed. Do not install globally on the host.
+#
+# The official MCP Python SDK. v1.26.0 is the surveyed Context7 version that
+# is known to expose FastMCP (stdio + streamable-HTTP). Parent may re-pin to a
+# newer compatible release after verifying metadata against PyPI.
+mcp==1.26.0

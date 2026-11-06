@@ -2,6 +2,11 @@
 
 OpenPets is a native macOS desktop pet for visible agent progress, review prompts, completion states, and lightweight animations across local coding tools.
 
+An experimental, separate **Linux GTK3 host** is available in [`Linux/`](./Linux/).
+See [Linux setup and limitations](./docs/linux-port.md) for its bundled pet,
+optional MCP server, notification actions and opt-in plugins. It is not yet full
+macOS feature parity. The macOS build is unchanged.
+
 It gives Codex Pets a shared home outside one assistant. The menu bar app, MCP server, CLI, and apps built with [OpenPetsKit](https://github.com/alterhq/OpenPetsKit) can all talk to the same local pet, so Codex, Claude Code, Cursor, OpenCode, Pi CLI, generic MCP clients, local apps, and scripts can report work through one visible desktop companion.
 
 https://github.com/user-attachments/assets/a12fc67e-c82c-488c-9480-e51826995c75
@@ -33,7 +38,7 @@ Add the recommended assistant instructions so the assistant uses the desktop pet
 - Show task progress, completion, review, waiting, and failure states through a visible desktop companion.
 - Let multiple local tools share one pet instead of each app owning a separate status UI.
 - Send notifications and animations from an MCP client, a Swift app, or CLI scripts.
-- Run the bundled Starcorn pet or install custom Codex Pets using an 8x9 sprite atlas.
+- Run the bundled Starcorn pet; the Linux GTK host also supports custom Codex Pet v1 8x9 and v2 8x11 atlases.
 - Define plugin surfaces through host-owned pet-matched cloud hotspots.
 - Use action URLs on notifications for lightweight follow-up flows.
 
@@ -188,6 +193,10 @@ Settings:
 
 - `display.scale`: Sprite display scale.
 - `display.messageAreaHeight`: Reserved height for the message bubble area.
+- Linux GTK also persists `display.messageBubbleWidth` and `display.messageFontSize`; adjust them from **Settings…** in the pet menu.
+- Linux GTK also persists `display.pluginSide` ("left" or "right", default "right"), placing the plugin chip stack on the chosen side of the window.
+- Linux GTK also persists `display.collapsedMessagePreviewSeconds` (integer 1–60, default 5 seconds). When messages are collapsed, active notifications preview briefly; each thread expires independently, and a same-thread update resets its timer.
+- Linux GTK offers an opt-in **Comic chat bubbles** plugin (off by default). Every `notify` is presented as chat, with only detail text shown in a shape-aware, rounded speech balloon opposite the plugin stack. Its font size, width-to-height ratio, and corner-radius percentage are adjustable in Settings; the balloon uses fixed 12 px text padding. See [Linux comic chat-bubble plugin](./docs/linux-chat-bubble.md).
 - `socketPath`: Unix socket used by the CLI and pet host.
 - `mcpHost`: HTTP bind host for the MCP server.
 - `mcpPort`: HTTP port for the MCP server.
