@@ -1,6 +1,7 @@
 """GTK3/X11 pet host. All GUI and socket callbacks run on the GLib loop."""
 
 import json
+import logging
 import math
 import os
 from collections import OrderedDict
@@ -29,6 +30,8 @@ from .chat_bubble import (
     CHAT_BUBBLE_CORNER_RADIUS_PERCENT,
     CHAT_BUBBLE_TEXT_SIZE,
 )
+from .chat_bubble_ui import ChatBubbleOverlay
+from .logging_setup import elapsed_ms, log_process_memory
 from .mcp_runtime import MCPPortBusy, MCPProcess
 from .animation import (
     ANIMATION_DURATIONS as DURATIONS,
@@ -49,13 +52,9 @@ from .motion import (
 )
 
 from .overlay import (
-    CHIP_PET_GAP,
     MESSAGE_MAX_WIDTH,
     MESSAGE_PAD_X,
-    CHAT_BUBBLE_MAX_WIDTH,
-    estimate_chat_bubble_size,
     compute_layout,
-    draw_chat_bubble,
     draw_overlay,
     input_rectangles,
     hit_test,
@@ -65,6 +64,7 @@ MESSAGE_TOGGLE_AUTO_HIDE_MS = 2500
 MCP_RETRY_INTERVAL_SECONDS = 2
 MCP_SETTINGS_DEFAULT_WIDTH = 500
 MCP_SETTINGS_SLIDER_WIDTH = 180
+logger = logging.getLogger(__name__)
 
 
 def message_surfaces_for_layout(messages, previews):
@@ -109,6 +109,7 @@ class PetWindow(Gtk.Window):
         self.chooser = None
         self.position_source = 0
         self.mcp_process = MCPProcess()
+        self._last_memory_log = 0.0
         self.atlas, self.cell_width, self.cell_height = load_atlas(pet_directory, scale)
         self.look_direction_enabled = sprite_version(pet_directory) == 2
         self.look_direction = None
@@ -257,6 +258,7 @@ class PetWindow(Gtk.Window):
         self._shutdown_requested = False
         from .plugin_ui import PluginController
         self.plugins = PluginController(self, self.settings, self._plugins_changed)
+        self.chat_bubble_overlay = ChatBubbleOverlay(self)
         for label, callback in (("Settings…", self.open_settings),
                                 ("Choose pet…", self.open_chooser),
                                 ("OpenCode setup…", self.open_onboarding),
@@ -297,17 +299,7 @@ class PetWindow(Gtk.Window):
         return int(round(value)) if integer else float(value)
 
     def _desired_width(self, chat_message=None):
-        width = max(360, self.cell_width, self.message_bubble_width + 2 * MESSAGE_PAD_X)
-        if self.chat_bubble_enabled and isinstance(chat_message, dict):
-            bubble_width, _, _ = estimate_chat_bubble_size(
-                chat_message.get("text", ""),
-                max_width=CHAT_BUBBLE_MAX_WIDTH,
-                font_size=self.chat_bubble_font_size,
-                aspect_ratio=self.chat_bubble_aspect_ratio,
-                corner_radius_percent=self.chat_bubble_corner_radius,
-            )
-            width = max(width, self.cell_width + 2 * (bubble_width + CHIP_PET_GAP))
-        return width
+        return max(360, self.cell_width, self.message_bubble_width + 2 * MESSAGE_PAD_X)
 
     def _plugins_changed(self):
         self.chat_bubble_enabled = self.plugins.chat_bubble_enabled
@@ -561,7 +553,12 @@ class PetWindow(Gtk.Window):
         if "X11" not in self.get_display().__gtype__.name:
             raise RuntimeError("This experimental host requires an X11 desktop session")
         if not self.composited:
-            print("openpets: no compositor detected; alpha transparency may be unavailable", file=sys.stderr)
+            logger.warning("no compositor detected; alpha transparency may be unavailable")
+        logger.info(
+            "GUI starting pet_id=%s scale=%.3f socket=%s compositor=%s",
+            self.pet_id, self.scale, self.socket_path, self.composited,
+        )
+        log_process_memory(logger, role="app-start")
         self.listener = bind_socket(self.socket_path)
         self.socket_identity = os.lstat(self.socket_path)
         self.listener_source = GLib.io_add_watch(
@@ -577,6 +574,7 @@ class PetWindow(Gtk.Window):
         self.show_all()
         self._schedule_toggle_hide()
         self.restore_position()
+        self._sync_chat_bubble_overlay()
         self.plugins.start()
         if self.settings.read().get("linuxMCPEnabled", True) is not False:
             self.mcp_item.set_active(True)
@@ -604,6 +602,7 @@ class PetWindow(Gtk.Window):
         # truncates subpixel motion and causes jitter during owned movement.
         self.motion.set_size(self.width, self.height)
         self._sync_motion_workarea(*self.get_position())
+        self._sync_chat_bubble_overlay()
         return False
 
     def _sync_motion_workarea(self, x, y):
@@ -700,6 +699,7 @@ class PetWindow(Gtk.Window):
             self._known_message_ids = {str(message.get("threadId", "")) for message in self.message_rows}
             self.preview_messages.clear()
             self._reschedule_preview_sweep()
+        self._sync_motion_task_state()
         self.relayout()
         self.update_input_shape()
         self.queue_draw()
@@ -737,6 +737,7 @@ class PetWindow(Gtk.Window):
         if not self._pointer_in_pet:
             self._schedule_toggle_hide()
         self._reschedule_preview_sweep()
+        self._sync_motion_task_state()
         self.relayout()
         self.update_input_shape()
         self.queue_draw()
@@ -773,6 +774,12 @@ class PetWindow(Gtk.Window):
         if not self.chat_bubble_enabled:
             return GLib.SOURCE_REMOVE
         self.plugins.chat_bubble.advance()
+        if not self._chat_bubble_queue_active():
+            # Keep expired collapsed previews in place while any comic bubble
+            # is visible, then remove them in the same relayout that clears the
+            # final bubble so the pet and bubble do not jump mid-message.
+            self._remove_expired_previews()
+        self._sync_motion_task_state()
         self.relayout()
         self.update_input_shape()
         self.queue_draw()
@@ -783,18 +790,37 @@ class PetWindow(Gtk.Window):
     def _preview_sweep(self):
         self.preview_source = 0
         now = time.monotonic()
-        expired = [thread_id for thread_id, entry in self.preview_messages.items()
-                   if now >= entry["expires_at"]]
-        for thread_id in expired:
-            del self.preview_messages[thread_id]
-        if expired:
+        removed_expired = self._remove_expired_previews(now)
+        if removed_expired:
+            self._sync_motion_task_state()
             self.relayout()
             self.update_input_shape()
             self.queue_draw()
         if self.preview_messages:
             self._reschedule_preview_sweep()
-            return GLib.SOURCE_CONTINUE
+            # Rescheduling creates the next source; keeping this one alive too
+            # doubles the timers every second while a queued bubble holds previews.
         return GLib.SOURCE_REMOVE
+
+    def _chat_bubble_queue_active(self):
+        queue = getattr(getattr(self, "plugins", None), "chat_bubble", None)
+        return self.chat_bubble_enabled and queue is not None and (
+            queue.current is not None or queue.pending_count > 0
+        )
+
+    def _remove_expired_previews(self, now=None):
+        """Remove expired previews unless a comic bubble still owns the layout."""
+        if self._chat_bubble_queue_active():
+            return False
+        if now is None:
+            now = time.monotonic()
+        expired = [
+            thread_id for thread_id, entry in self.preview_messages.items()
+            if now >= entry["expires_at"]
+        ]
+        for thread_id in expired:
+            del self.preview_messages[thread_id]
+        return bool(expired)
 
     def open_notifications(self):
         from .notification_ui import NotificationCenter
@@ -816,6 +842,7 @@ class PetWindow(Gtk.Window):
         self.mcp_item.set_tooltip_text("MCP server is off")
 
     def _set_mcp_indicator(self, state, detail=None):
+        previous_state = self._mcp_indicator_state
         style = self.mcp_item.get_style_context()
         for css_class in ("mcp-pending", "mcp-active"):
             style.remove_class(css_class)
@@ -833,6 +860,9 @@ class PetWindow(Gtk.Window):
             tooltip = detail or "MCP server is off"
         self.mcp_item.set_label(label)
         self.mcp_item.set_tooltip_text(tooltip)
+        if state != previous_state:
+            log = logger.warning if state == "pending" else logger.info
+            log("MCP state changed %s -> %s", previous_state, state)
 
     def _cancel_mcp_retry(self):
         if self.mcp_retry_source:
@@ -846,6 +876,7 @@ class PetWindow(Gtk.Window):
             )
 
     def _fail_mcp_start(self, error):
+        logger.error("MCP server startup failed: %s", error)
         self._cancel_mcp_retry()
         self._mcp_requested = False
         self.mcp_process.stop()
@@ -872,6 +903,8 @@ class PetWindow(Gtk.Window):
             if not self.mcp_process.running():
                 self.mcp_process.start(self.socket_path, self.settings.read())
         except MCPPortBusy as error:
+            if self._mcp_indicator_state != "pending":
+                logger.warning("MCP endpoint unavailable; will retry: %s", error)
             self._set_mcp_indicator("pending", str(error))
             return True
         except (OSError, ValueError, RuntimeError) as error:
@@ -879,6 +912,8 @@ class PetWindow(Gtk.Window):
             return False
 
         if self.mcp_process.ready():
+            logger.info("MCP server endpoint ready host=%s port=%s", self.mcp_process.host,
+                        self.mcp_process.port)
             self._set_mcp_indicator("active")
             return False
         self._set_mcp_indicator("pending", "MCP server is starting; checking until its endpoint is ready.")
@@ -895,18 +930,21 @@ class PetWindow(Gtk.Window):
     def on_mcp_toggle(self, item):
         try:
             if item.get_active():
+                logger.info("MCP server enabled by user")
                 self._mcp_requested = True
                 self._set_mcp_indicator("pending", "Starting the MCP server and checking for readiness.")
                 self.settings.update({"linuxMCPEnabled": True})
                 if self._attempt_mcp_start():
                     self._schedule_mcp_retry()
             else:
+                logger.info("MCP server disabled by user")
                 self._mcp_requested = False
                 self._cancel_mcp_retry()
                 self.mcp_process.stop()
                 self.settings.update({"linuxMCPEnabled": False})
                 self._set_mcp_indicator("off")
         except (OSError, ValueError) as error:
+            logger.error("could not change MCP server state: %s", error)
             self._fail_mcp_start(error)
 
     def handle_command(self, command):
@@ -939,6 +977,13 @@ class PetWindow(Gtk.Window):
                     if notification is not None and self.chat_bubble_enabled:
                         if self.plugins.chat_bubble.enqueue(notification):
                             self._schedule_chat_bubble_advance()
+                            # enqueue() makes the first item current immediately;
+                            # sync its separate overlay now rather than waiting
+                            # until the expiry timer advances the queue.
+                            self._sync_motion_task_state()
+                            self.relayout()
+                            self.update_input_shape()
+                            self.queue_draw()
                 return response
         return self.state.apply(command)
 
@@ -997,10 +1042,7 @@ class PetWindow(Gtk.Window):
                 self.cycles_remaining = None
             self.schedule_frame()
         self.message_rows = list(self.state.messages.values())[-3:]
-        task_active = has_active_task(self.state.messages)
-        if task_active != self._task_motion_frozen:
-            self._task_motion_frozen = task_active
-            self.motion.set_task_active(task_active)
+        self._sync_motion_task_state()
         current_ids = {str(message.get("threadId", "")) for message in self.message_rows}
         if self.appearance.get("messagesCollapsed"):
             self.unread_message_count = min(
@@ -1022,6 +1064,18 @@ class PetWindow(Gtk.Window):
             GLib.source_remove(self.idle_source)
             self.idle_source = 0
 
+    def _sync_motion_task_state(self):
+        """Keep motion paused while tasks or their transient messages remain visible."""
+        task_active = has_active_task(self.state.messages)
+        preview_visible = (
+            self.appearance.get("messagesCollapsed") and bool(self.preview_messages)
+        )
+        bubble_visible = self._chat_bubble_queue_active()
+        should_freeze = task_active or preview_visible or bubble_visible
+        if should_freeze != self._task_motion_frozen:
+            self._task_motion_frozen = should_freeze
+            self.motion.set_task_active(should_freeze)
+
     def visible_animation(self):
         return self.drag_animation or self.motion_animation or self.state.animation
 
@@ -1032,8 +1086,7 @@ class PetWindow(Gtk.Window):
         visible_messages, visible_previews = message_surfaces_for_layout(
             self.message_rows, self.preview_messages.values()
         )
-        chat_message = self.plugins.chat_bubble.current if self.chat_bubble_enabled else None
-        self.width = self._desired_width(chat_message)
+        self.width = self._desired_width()
         self.layout = compute_layout(self.width, self.cell_width, self.cell_height,
                                      self.plugins.surfaces(), visible_messages,
                                      theme_mode=self.appearance["themeMode"],
@@ -1050,7 +1103,7 @@ class PetWindow(Gtk.Window):
                                        chat_font_size=self.chat_bubble_font_size,
                                        chat_aspect_ratio=self.chat_bubble_aspect_ratio,
                                        chat_corner_radius_percent=self.chat_bubble_corner_radius,
-                                        chat_message=chat_message)
+                                         chat_message=None)
         if self.height != self.layout.total_height or previous_width != self.width:
             x, y = self.get_position()
             # Preserve sprite screen anchor when content changes above/below
@@ -1076,6 +1129,36 @@ class PetWindow(Gtk.Window):
                 self.motion.set_workarea((area.x, area.y, area.width, area.height))
             self.move(x, y)
             self.motion.set_position(x, y)
+        self._sync_chat_bubble_overlay()
+
+    def _sync_chat_bubble_overlay(self):
+        overlay = getattr(self, "chat_bubble_overlay", None)
+        if overlay is None:
+            return
+        if not self.chat_bubble_enabled or not self.get_visible():
+            overlay.set_parent_visible(False)
+            return
+        message = self.plugins.chat_bubble.current
+        if message is None:
+            overlay.set_bubble(None, pet_x=0, pet_y=0, cell_width=0,
+                               cell_height=0, workarea=None, plugin_side=self.plugin_side)
+            return
+        window_x, window_y = self.get_position()
+        pet_x = window_x + self.layout.pet_x
+        pet_y = window_y + self.layout.pet_top
+        display = self.get_display()
+        monitor = display.get_monitor_at_point(pet_x, pet_y) or display.get_primary_monitor()
+        area = monitor.get_workarea() if monitor is not None else None
+        workarea = (area.x, area.y, area.width, area.height) if area is not None else None
+        overlay.set_bubble(
+            message, pet_x=pet_x, pet_y=pet_y,
+            cell_width=self.cell_width, cell_height=self.cell_height,
+            workarea=workarea, plugin_side=self.plugin_side,
+            font_size=self.chat_bubble_font_size,
+            aspect_ratio=self.chat_bubble_aspect_ratio,
+            corner_radius_percent=self.chat_bubble_corner_radius,
+            opacity=self.appearance["chatBubbleOpacity"],
+        )
 
     def update_input_shape(self):
         if self.get_window() is None:
@@ -1147,9 +1230,6 @@ class PetWindow(Gtk.Window):
         context.set_source_rgba(0, 0, 0, 0)
         context.paint()
         context.set_operator(cairo.OPERATOR_OVER)
-        # Draw the balloon first so its pointed tail terminates underneath the
-        # pet sprite, like a comic speech pointer aimed at its speaker.
-        draw_chat_bubble(context, self.layout)
         row = list(ANIMATIONS).index(self.current_animation)
         column = self.frame
         if self.drag_active and self.look_direction_enabled and self.look_direction is not None:
@@ -1330,12 +1410,16 @@ class PetWindow(Gtk.Window):
         if self.motion_source:
             GLib.source_remove(self.motion_source)
             self.motion_source = 0
+        overlay = getattr(self, "chat_bubble_overlay", None)
+        if overlay is not None:
+            overlay.set_parent_visible(False)
 
     def _on_show(self):
         """Window shown: resume the motion timer if a mode is active."""
         if self.motion.mode != MODE_OFF:
             self.motion.resume()
         self._reschedule_motion_timer()
+        self._sync_chat_bubble_overlay()
 
     def _query_cursor_position(self):
         """Query the global pointer position. Returns (x, y) or None."""
@@ -1518,6 +1602,8 @@ class PetWindow(Gtk.Window):
 
     def on_read(self, fd, condition):
         connection = self.connections[fd]
+        started = time.perf_counter()
+        command_type = "unknown"
         try:
             chunk = connection["socket"].recv(min(4096, 65537 - len(connection["buffer"])))
             if not chunk:
@@ -1529,6 +1615,10 @@ class PetWindow(Gtk.Window):
             if b"\n" not in connection["buffer"]:
                 return GLib.SOURCE_CONTINUE
             command = json.loads(connection["buffer"].split(b"\n", 1)[0])
+            command_type = (
+                str(command.get("type", "unknown"))
+                if isinstance(command, dict) else "invalid"
+            )
             response = self.handle_command(command)
             reset = (isinstance(command, dict) and response.get("ok") and
                      command.get("type") in ("notify", "playAnimation", "stopAnimation"))
@@ -1537,11 +1627,29 @@ class PetWindow(Gtk.Window):
                           if command["type"] == "notify" else "")
                 self.cycles_remaining = 3 if status in FINITE_STATUS_ANIMATIONS else None
             self.refresh(reset_animation=reset)
+            if command_type not in ("ping", "getState"):
+                status = ""
+                if command_type == "notify":
+                    notification = command.get("notification", {})
+                    if isinstance(notification, dict):
+                        status = str(notification.get("status", ""))[:32]
+                duration = elapsed_ms(started)
+                logger.info(
+                    "IPC handled type=%s status=%s ok=%s elapsed_ms=%.1f",
+                    command_type, status, bool(response.get("ok")), duration,
+                )
+                if duration >= 100.0:
+                    logger.warning(
+                        "slow IPC request type=%s elapsed_ms=%.1f",
+                        command_type, duration,
+                    )
         except BlockingIOError:
             return GLib.SOURCE_CONTINUE
         except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError) as error:
+            logger.warning("invalid IPC request type=%s: %s", command_type, error)
             response = {"ok": False, "message": str(error)}
         except OSError:
+            logger.debug("IPC connection closed type=%s", command_type, exc_info=True)
             self.close_connection(fd, False)
             return GLib.SOURCE_REMOVE
         encoded = json.dumps(response, ensure_ascii=False).encode("utf-8") + b"\n"
@@ -1571,6 +1679,9 @@ class PetWindow(Gtk.Window):
 
     def sweep(self):
         now = time.monotonic()
+        if now - self._last_memory_log >= 60.0:
+            self._last_memory_log = now
+            log_process_memory(logger, role="app-periodic")
         for fd, connection in list(self.connections.items()):
             if connection["deadline"] <= now:
                 self.close_connection(fd)
@@ -1589,6 +1700,7 @@ class PetWindow(Gtk.Window):
         return GLib.SOURCE_CONTINUE
 
     def shutdown(self):
+        logger.info("GUI shutdown requested")
         # Stop child services before leaving the GTK loop. Relying only on the
         # run() finally block can leave MCP behind if shutdown is initiated by
         # a menu/tray action while other GLib sources are still active.
@@ -1620,6 +1732,7 @@ class PetWindow(Gtk.Window):
             GLib.source_remove(source)
 
     def cleanup(self):
+        logger.info("GUI cleanup starting")
         # Tear down the listener first so failures in unrelated UI/plugin
         # cleanup cannot orphan the MCP child and keep its port occupied.
         self._mcp_requested = False
@@ -1648,10 +1761,14 @@ class PetWindow(Gtk.Window):
 
         self.save_position()
         self.plugins.close()
+        overlay = getattr(self, "chat_bubble_overlay", None)
+        if overlay is not None:
+            overlay.destroy()
         if self.listener is not None:
             self.listener.close()
             cleanup_socket(self.socket_path, self.socket_identity)
         self.destroy()
+        logger.info("GUI cleanup complete")
 
 
 def run(pet_directory, scale, socket_path):
@@ -1661,5 +1778,8 @@ def run(pet_directory, scale, socket_path):
     try:
         window.start()
         Gtk.main()
+    except Exception:
+        logger.exception("GUI main loop failed")
+        raise
     finally:
         window.cleanup()

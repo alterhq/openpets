@@ -98,6 +98,78 @@ class MotionGUITests(unittest.TestCase):
         window.refresh()
         self.assertFalse(window.motion.is_paused())
 
+    def test_done_waits_for_final_chat_bubble_to_expire_before_resuming_motion(self):
+        from openpets_linux.motion import MODE_FREE_ROAM
+
+        window = self.make_window()
+        window.motion.set_mode(MODE_FREE_ROAM)
+        window.chat_bubble_enabled = True
+        window.chat_bubble_duration_seconds = 60
+
+        window.handle_command({
+            "type": "notify",
+            "notification": {
+                "title": "Build", "text": "Build started", "status": "running",
+                "threadId": "build",
+            },
+        })
+        window.refresh()
+        self.assertTrue(window.motion.is_paused())
+
+        window.handle_command({
+            "type": "notify",
+            "notification": {
+                "title": "Build", "text": "Build completed", "status": "done",
+                "threadId": "build",
+            },
+        })
+        window.refresh()
+        self.assertTrue(window.motion.is_paused())
+
+        # The earlier bubble expires, but the final (done) bubble is now shown.
+        window._cancel_chat_bubble_timer()
+        window._advance_chat_bubble()
+        self.assertTrue(window.motion.is_paused())
+
+        # Movement resumes only after that final bubble's own TTL expires.
+        window._cancel_chat_bubble_timer()
+        window._advance_chat_bubble()
+        self.assertFalse(window.motion.is_paused())
+
+    def test_done_waits_for_collapsed_message_preview_expiry_before_resuming_motion(self):
+        from openpets_linux.motion import MODE_FREE_ROAM
+
+        window = self.make_window()
+        window.motion.set_mode(MODE_FREE_ROAM)
+        window.appearance["messagesCollapsed"] = True
+
+        with patch("openpets_linux.ui.time.monotonic", return_value=100.0):
+            window.handle_command({
+                "type": "notify",
+                "notification": {
+                    "title": "Build", "text": "Build started", "status": "running",
+                    "threadId": "build",
+                },
+            })
+            window.refresh()
+        self.assertTrue(window.motion.is_paused())
+
+        with patch("openpets_linux.ui.time.monotonic", return_value=101.0):
+            window.handle_command({
+                "type": "notify",
+                "notification": {
+                    "title": "Build", "text": "Build completed", "status": "done",
+                    "threadId": "build",
+                },
+            })
+            window.refresh()
+        self.assertEqual(window.preview_messages["build"]["expires_at"], 106.0)
+        self.assertTrue(window.motion.is_paused())
+
+        with patch("openpets_linux.ui.time.monotonic", return_value=106.0):
+            window._preview_sweep()
+        self.assertFalse(window.motion.is_paused())
+
     def test_default_mode_is_off(self):
         window = self.make_window()
         self.assertTrue(window.motion_off_item.get_active())

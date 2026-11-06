@@ -105,7 +105,8 @@ FINITE_STATUS_ANIMATIONS: frozenset[str] = frozenset({
 
 # Notifications in these states mean the task is still underway. The pet host
 # uses the latest status for each thread to freeze autonomous movement until
-# every active task reaches a terminal status (for example, done or failed).
+# every active task reaches a terminal status (for example, done or failed),
+# then waits for any visible transient message surface to expire before resume.
 ACTIVE_TASK_STATUSES: frozenset[str] = frozenset({
     "running", "task", "working", "waiting", "queued", "pending",
     "review", "reviewing",

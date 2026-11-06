@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import logging
 import sys
 import subprocess
 
@@ -69,6 +70,13 @@ def main(argv=None):
     if args.smoke_test:
         from .smoke import smoke_test
         return smoke_test()
+    role = "mcp" if args.command == "mcp" else (
+        "app" if args.command in (None, "run") else "cli"
+    )
+    from .logging_setup import configure_logging
+    log_path = configure_logging(role)
+    logger = logging.getLogger("openpets.cli")
+    logger.info("process starting role=%s command=%s log=%s", role, args.command or "run", log_path)
     from .settings import Settings
     settings = Settings()
     config = settings.read()
@@ -166,5 +174,10 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except (OSError, ValueError, RuntimeError, ImportError, IPCError, CoreError, subprocess.SubprocessError) as error:
+        logging.getLogger("openpets.cli").error("command failed: %s", error)
         print(f"openpets: {error}", file=sys.stderr)
+        sys.exit(1)
+    except Exception:
+        logging.getLogger("openpets.cli").exception("unhandled command failure")
+        print("openpets: unexpected error; see the OpenPets log file", file=sys.stderr)
         sys.exit(1)

@@ -21,8 +21,9 @@ unchanged. Docker is for development/testing, never required to run the pet.
   inside the current monitor workarea, never straight vertical). Mutually
   exclusive, persisted in `config.json` as `motionMode`. Dragging temporarily
   pauses autonomous movement and resumes safely on release. Autonomous motion
-  also pauses while any notification thread is running, waiting, or in review,
-  and resumes when all active threads reach a terminal state.
+  also pauses while any notification thread is running, waiting, or in review.
+  After the last active thread reaches a terminal state, motion stays paused
+  until its visible comic bubble and/or collapsed-message preview expires.
 - Threaded notifications, TTL, bounded in-memory history and details window;
   HTTP(S) buttons open only on an explicit click, never shell/command/file URLs.
 - Optional official-SDK MCP HTTP/stdio service and OpenCode V2 config generator.
@@ -54,8 +55,13 @@ message background opacity (continuous 0.0..1.0), plugin stack side (left or
 right), collapsed-message preview seconds, corner radius, and compositor
 background blur. The circular expand/collapse control sits at the pet's upper
 right; when collapsed it carries a red unread dot. Active notifications appear
-as temporary previews when collapsed (including existing messages at collapse),
-with an independent timer per thread; same-thread updates reset that timer.
+  as temporary previews when collapsed (including existing messages at collapse),
+  with an independent timer per thread; same-thread updates reset that timer.
+  When the comic-bubble queue is still visible at preview expiry, removal is
+  deferred until the final bubble expires to avoid shifting the pet mid-message.
+  Comic bubbles render in a separate input-transparent GTK window and are
+  raster-cached; moving the pet repositions the window without rerendering the
+  bubble, while content/style/side changes invalidate the cache.
 The control hides 2.5 seconds after the pointer leaves the pet and returns when
 the pointer enters the pet's clickable area. A new notification received while
 collapsed also reveals its preview and control briefly, even if auto-hide had
@@ -65,6 +71,13 @@ balanced padding. All changes persist in
 it in a compatible compositor such as Picom (`blur-background` for transparent
 ARGB windows). OpenPets reports that setup is needed, but cannot detect the
 compositor's active blur rules reliably or configure them automatically.
+
+OpenPets writes private, rotating per-process diagnostics (INFO/WARNING/ERROR)
+to `${XDG_STATE_HOME:-~/.local/state}/openpets/logs/` (override with
+`OPENPETS_LOG_DIR`). GUI and MCP processes use separate PID-tagged files;
+notification text and URLs are intentionally excluded. The GUI records a
+memory snapshot at startup and about once per minute, including RSS, anonymous,
+file-backed, shared, and swapped memory.
 
 For a Codex Pets bundle such as Cute Yaya, install it with
 `npx codex-pets add cute-yaya`, then choose **Choose pet…** → **小娅娅** (or

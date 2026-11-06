@@ -65,6 +65,7 @@ class TestCollapsedMessagePreviewGUI(unittest.TestCase):
             window = PetWindow(bundled_starcorn_path(), .42, directory + "/host.sock")
         # Isolate lifecycle tests from geometry/layout (overlay.py signature is
         # owned by work item C); the preview state itself is what we assert on.
+        window._real_relayout = window.relayout
         window.relayout = lambda *a, **k: None
         return window
 
@@ -82,6 +83,55 @@ class TestCollapsedMessagePreviewGUI(unittest.TestCase):
         # collapse transition, so clear the seed message's initial preview.
         window.preview_messages.clear()
         window._reschedule_preview_sweep()
+
+    def test_three_same_thread_notifications_spaced_by_one_bubble_ttl(self):
+        """Show three notifications one full bubble duration apart."""
+        from openpets_linux.ui import GLib
+
+        with tempfile.TemporaryDirectory(prefix="openpets-bubble-sequence-") as directory:
+            window = self._make_window(directory)
+            del window.relayout  # use the real path that synchronizes the overlay
+            window.chat_bubble_enabled = True
+            window.chat_bubble_duration_seconds = 8
+            scheduled = []
+
+            def capture_timeout(delay, callback):
+                if delay == 8:
+                    scheduled.append((delay, callback))
+                    return len(scheduled)
+                return 1000 + delay
+
+            with patch.object(GLib, "timeout_add_seconds", side_effect=capture_timeout), \
+                 patch.object(GLib, "source_remove", return_value=None):
+                window.start()
+                try:
+                    for index, text in enumerate((
+                        "bubble-first", "bubble-second", "bubble-third",
+                    )):
+                        if index:
+                            delay, callback = scheduled[-1]
+                            self.assertEqual(delay, 8)
+                            callback()  # expire the previous bubble before next notify
+                            self.assertIsNone(window.chat_bubble_overlay.message)
+
+                        response = window.handle_command({
+                            "type": "notify",
+                            "notification": {
+                                "title": "Chat",
+                                "threadId": "same-thread",
+                                "status": "chat",
+                                "text": text,
+                            },
+                        })
+                        self.assertTrue(response["ok"])
+                        self.assertEqual(window.chat_bubble_overlay.message["text"], text)
+
+                    delay, callback = scheduled[-1]
+                    self.assertEqual(delay, 8)
+                    callback()
+                    self.assertIsNone(window.chat_bubble_overlay.message)
+                finally:
+                    window.cleanup()
 
     def test_collapsing_existing_messages_previews_them(self):
         with tempfile.TemporaryDirectory(prefix="openpets-preview-collapse-") as directory:
@@ -180,12 +230,17 @@ class TestCollapsedMessagePreviewGUI(unittest.TestCase):
                 self._collapse(window)
                 window.chat_bubble_enabled = True
                 window.plugins.chat_bubble_enabled = True
-                del window.relayout
+                window.relayout = window._real_relayout
                 response = window.handle_command(
                     _notify("chat-preview", "Chat notification", "message",
                             "This remains visible in collapsed message previews.")
                 )
                 self.assertTrue(response["ok"])
+                self.assertIsNotNone(window.plugins.chat_bubble.current)
+                self.assertEqual(
+                    window.chat_bubble_overlay.message["threadId"], "chat-preview"
+                )
+                self.assertTrue(window.chat_bubble_overlay.get_visible())
                 self.assertEqual(
                     [preview.thread_id for preview in window.layout.preview_rects],
                     ["chat-preview"],
@@ -283,6 +338,46 @@ class TestCollapsedMessagePreviewGUI(unittest.TestCase):
                     window._preview_sweep()
                 self.assertEqual(list(window.preview_messages.keys()), ["t2"])
                 self.assertAlmostEqual(window.preview_messages["t2"]["expires_at"], 1007.0)
+            finally:
+                window.cleanup()
+
+    def test_expired_preview_keeps_layout_stable_until_final_chat_bubble_expires(self):
+        with tempfile.TemporaryDirectory(prefix="openpets-preview-layout-hold-") as directory:
+            window = self._make_window(directory)
+            window.start()
+            try:
+                self._collapse(window)
+                del window.relayout
+                window.chat_bubble_enabled = True
+                window.plugins.chat_bubble_enabled = True
+
+                clock = _FakeClock(1000.0)
+                with patch("openpets_linux.ui.time.monotonic", clock):
+                    response = window.handle_command(
+                        _notify("final", "Done", "done", "The final result is ready.")
+                    )
+                    self.assertTrue(response["ok"])
+                    window.refresh()
+                    self.assertEqual(list(window.preview_messages), ["final"])
+                    pet_top_while_bubble_visible = window.layout.pet_top
+
+                    # The preview TTL passes first, but deleting it would
+                    # reflow the window while the comic bubble is still shown.
+                    clock.value = window.preview_messages["final"]["expires_at"]
+                    window._preview_source = 0
+                    window._preview_sweep()
+                    self.assertIn("final", window.preview_messages)
+                    self.assertEqual(
+                        window.layout.pet_top, pet_top_while_bubble_visible
+                    )
+
+                    # Expire the final bubble. Its callback removes the old
+                    # preview and relayouts once, after the bubble is cleared.
+                    window._cancel_chat_bubble_timer()
+                    window._advance_chat_bubble()
+                    self.assertNotIn("final", window.preview_messages)
+                    self.assertIsNone(window.plugins.chat_bubble.current)
+                    window._reschedule_preview_sweep()
             finally:
                 window.cleanup()
 

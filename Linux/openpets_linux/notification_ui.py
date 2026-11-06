@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from .notifications import safe_action_url
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["NotificationCenter"]
 
@@ -134,7 +138,7 @@ class NotificationCenter:
             # No shell; use desktop's URI handler only after user click.
             self._gio.AppInfo.launch_default_for_uri(safe_url, None)
         except Exception:
-            pass
+            logger.exception("desktop URI handler failed to open a notification action")
 
     def _dismiss(self, _button, thread_id):
         if self._clear_callback is not None:
