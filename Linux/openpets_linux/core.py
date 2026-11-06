@@ -134,6 +134,7 @@ MAX_STATUS_LENGTH = 64
 MAX_THREAD_ID_LENGTH = 128
 MAX_URL_LENGTH = 2048
 MAX_BUTTON_LABEL_LENGTH = 128
+MAX_KIND_LENGTH = 32
 MAX_MESSAGES = 100
 
 
@@ -311,6 +312,15 @@ class State:
         ):
             return {"ok": False, "message": "notification.buttonLabel is too long"}
 
+        kind = notification.get("kind", notification.get("messageType"))
+        if kind is not None and (
+            not isinstance(kind, str) or not kind or len(kind) > MAX_KIND_LENGTH
+        ):
+            return {"ok": False, "message": "notification.kind must be a short string"}
+        # Notify is always surfaced as chat text; status remains available for
+        # animation/task semantics, but never changes the presentation kind.
+        kind = "chat"
+
         ttl_seconds = notification.get("ttlSeconds")
         if ttl_seconds is not None and (
             not _is_finite_number(ttl_seconds) or ttl_seconds < 0
@@ -329,7 +339,9 @@ class State:
             "threadId": thread_id,
             "url": url,
             "buttonLabel": button_label,
+            "kind": kind,
             "ttlSeconds": ttl_seconds,
+            "updated_at": now,
             "expires_at": expires_at,
         }
 

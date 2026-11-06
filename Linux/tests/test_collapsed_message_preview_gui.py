@@ -172,6 +172,27 @@ class TestCollapsedMessagePreviewGUI(unittest.TestCase):
             finally:
                 window.cleanup()
 
+    def test_chat_bubble_plugin_does_not_hide_collapsed_message_preview(self):
+        with tempfile.TemporaryDirectory(prefix="openpets-preview-chat-plugin-") as directory:
+            window = self._make_window(directory)
+            window.start()
+            try:
+                self._collapse(window)
+                window.chat_bubble_enabled = True
+                window.plugins.chat_bubble_enabled = True
+                del window.relayout
+                response = window.handle_command(
+                    _notify("chat-preview", "Chat notification", "message",
+                            "This remains visible in collapsed message previews.")
+                )
+                self.assertTrue(response["ok"])
+                self.assertEqual(
+                    [preview.thread_id for preview in window.layout.preview_rects],
+                    ["chat-preview"],
+                )
+            finally:
+                window.cleanup()
+
     def test_collapsed_notify_reveals_preview_after_toggle_auto_hidden(self):
         from openpets_linux.overlay import hit_test
 

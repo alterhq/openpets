@@ -86,10 +86,13 @@ def stop_pet(socket_path=None):
 
 
 def notify(socket_path=None, title="", text="", status="", threadId=None,
-           url=None, buttonLabel=None, ttlSeconds=None):
+           url=None, buttonLabel=None, ttlSeconds=None, kind="chat"):
     if not isinstance(title, str) or not title or status not in STATUS_VALUES:
         return {"ok": False, "message": "A title and supported status are required"}
-    notification = {"title": title, "text": text, "status": status}
+    if kind not in (None, "status", "chat", "conversation"):
+        return {"ok": False, "message": "kind must be status, chat, or conversation"}
+    # All notifications are presented as conversational text by comic chat.
+    notification = {"title": title, "text": text, "status": status, "kind": "chat"}
     for key, value in (("threadId", threadId), ("url", url), ("buttonLabel", buttonLabel), ("ttlSeconds", ttlSeconds)):
         if value is not None:
             notification[key] = value
@@ -152,7 +155,9 @@ def create_server(socket_path=None, host="127.0.0.1", port=3001, endpoint="/mcp"
         sdk_module.Settings.model_rebuild(_types_namespace=vars(sdk_module))
     server = FastMCP("openpets", instructions=(
         "Use wake_pet before reporting work if the pet is asleep. Use notify for "
-        "meaningful progress, review, completion or failure; preserve its threadId "
+        "meaningful progress, review, completion or failure. Every notify is a chat "
+        "message and must be marked kind='chat' for the optional comic bubble. "
+        "Preserve its threadId "
         "for updates to the same task. Do not spam updates or stop the pet unless "
         "the user requests it. Notification action URLs open only after a user click."
     ), host=host, port=port, streamable_http_path=endpoint,
@@ -182,9 +187,12 @@ def create_server(socket_path=None, host="127.0.0.1", port=3001, endpoint="/mcp"
     @server.tool(name="notify")
     def tool_notify(title: str, status: str, text: str = "", threadId: str | None = None,
                     url: str | None = None, buttonLabel: str | None = None,
-                    ttlSeconds: float | None = None) -> dict[str, Any]:
-        """Show task progress. Save returned threadId and reuse it to update the same task."""
-        return result(notify(path, title, text, status, threadId, url, buttonLabel, ttlSeconds))
+                    ttlSeconds: float | None = None, kind: str = "chat") -> dict[str, Any]:
+        """Notify an update. Always mark every notify as kind='chat'.
+
+        Save returned threadId and reuse it to update the same task/chat thread.
+        """
+        return result(notify(path, title, text, status, threadId, url, buttonLabel, ttlSeconds, kind))
 
     @server.tool(name="play_pet_animation")
     def tool_animation(name: str, loop: bool = True, ttlSeconds: float | None = None) -> dict[str, Any]:

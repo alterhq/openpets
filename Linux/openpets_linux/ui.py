@@ -24,6 +24,11 @@ from .pet import load_atlas, sprite_version
 from .settings import Settings
 from .library import PetLibrary
 from .notifications import NotificationHistory
+from .chat_bubble import (
+    CHAT_BUBBLE_ASPECT_RATIO,
+    CHAT_BUBBLE_CORNER_RADIUS_PERCENT,
+    CHAT_BUBBLE_TEXT_SIZE,
+)
 from .mcp_runtime import MCPProcess
 from .animation import (
     ANIMATION_DURATIONS as DURATIONS,
@@ -44,15 +49,24 @@ from .motion import (
 )
 
 from .overlay import (
+    CHIP_PET_GAP,
     MESSAGE_MAX_WIDTH,
     MESSAGE_PAD_X,
+    CHAT_BUBBLE_MAX_WIDTH,
+    estimate_chat_bubble_size,
     compute_layout,
+    draw_chat_bubble,
     draw_overlay,
     input_rectangles,
     hit_test,
 )
 
 MESSAGE_TOGGLE_AUTO_HIDE_MS = 2500
+
+
+def message_surfaces_for_layout(messages, previews):
+    """Keep the existing message surfaces intact alongside the chat plugin."""
+    return list(messages), tuple(previews)
 
 # OpenPetsKit v0.2.1 PetAnimation.swift (MIT), not a fixed high-FPS redraw loop.
 # Timing data now lives in the pure :mod:`openpets_linux.animation` module and is
@@ -76,6 +90,16 @@ class PetWindow(Gtk.Window):
         )
         self.message_font_size = self._bounded_display_value(
             saved_display.get("messageFontSize"), 10.0, 6, 24
+        )
+        self.chat_bubble_font_size = self._bounded_display_value(
+            saved_display.get("chatBubbleFontSize"), CHAT_BUBBLE_TEXT_SIZE, 8, 28
+        )
+        self.chat_bubble_aspect_ratio = self._bounded_display_value(
+            saved_display.get("chatBubbleAspectRatio"), CHAT_BUBBLE_ASPECT_RATIO, 1, 3.5
+        )
+        self.chat_bubble_corner_radius = self._bounded_display_value(
+            saved_display.get("chatBubbleCornerRadiusPercent"),
+            CHAT_BUBBLE_CORNER_RADIUS_PERCENT, 0, 50,
         )
         self.history = NotificationHistory()
         self.notification_center = None
@@ -105,6 +129,10 @@ class PetWindow(Gtk.Window):
         self.listener = None
         self.socket_identity = None
         self.message_rows = []
+        plugin_settings = self.settings.read().get("linuxPlugins", {})
+        self.chat_bubble_enabled = (
+            isinstance(plugin_settings, dict) and plugin_settings.get("chatBubble") is True
+        )
         display_settings = self.settings.read().get("display", {})
         if not isinstance(display_settings, dict):
             display_settings = {}
@@ -112,6 +140,7 @@ class PetWindow(Gtk.Window):
             "themeMode": display_settings.get("themeMode", "dark"),
             "pluginOpacity": display_settings.get("pluginOpacity", 0.94),
             "messageOpacity": display_settings.get("messageOpacity", 0.94),
+            "chatBubbleOpacity": display_settings.get("chatBubbleOpacity", 0.94),
             "blurBackground": display_settings.get("blurBackground", False),
             "borderRadius": display_settings.get("borderRadius", 14.0),
             "messagesCollapsed": display_settings.get("messagesCollapsed", False),
@@ -128,6 +157,15 @@ class PetWindow(Gtk.Window):
         except OverflowError:
             preview_seconds = 5
         self.collapsed_message_preview_seconds = int(round(max(1, min(60, float(preview_seconds)))))
+        bubble_duration = display_settings.get("chatBubbleDurationSeconds", 5)
+        if isinstance(bubble_duration, bool) or not isinstance(bubble_duration, (int, float)):
+            bubble_duration = 5
+        try:
+            if not math.isfinite(bubble_duration):
+                bubble_duration = 5
+        except OverflowError:
+            bubble_duration = 5
+        self.chat_bubble_duration_seconds = int(round(max(1, min(60, float(bubble_duration)))))
         self.unread_message_count = 0
         self._known_message_ids = set()
         self._task_motion_frozen = False
@@ -135,6 +173,7 @@ class PetWindow(Gtk.Window):
         # is display order: older previews above, newest/update at the bottom.
         self.preview_messages = OrderedDict()
         self.preview_source = 0
+        self.chat_bubble_source = 0
         self.message_toggle_visible = True
         self._toggle_hide_source = 0
         self._pointer_in_pet = False
@@ -151,7 +190,7 @@ class PetWindow(Gtk.Window):
         if visual is not None:
             self.set_visual(visual)
         self.composited = screen.is_composited()
-        self.width = max(360, self.cell_width, self.message_bubble_width + 2 * MESSAGE_PAD_X)
+        self.width = self._desired_width()
         self.layout = compute_layout(
             self.width, self.cell_width, self.cell_height,
             message_max_width=self.message_bubble_width,
@@ -210,7 +249,7 @@ class PetWindow(Gtk.Window):
         self.menu.show_all()
         self.indicator = None
         from .plugin_ui import PluginController
-        self.plugins = PluginController(self, self.settings, lambda: self.refresh())
+        self.plugins = PluginController(self, self.settings, self._plugins_changed)
         for label, callback in (("Settings…", self.open_settings),
                                 ("Choose pet…", self.open_chooser),
                                 ("OpenCode setup…", self.open_onboarding),
@@ -249,6 +288,27 @@ class PetWindow(Gtk.Window):
         value = max(minimum, min(maximum, value))
         return int(round(value)) if integer else float(value)
 
+    def _desired_width(self, chat_message=None):
+        width = max(360, self.cell_width, self.message_bubble_width + 2 * MESSAGE_PAD_X)
+        if self.chat_bubble_enabled and isinstance(chat_message, dict):
+            bubble_width, _, _ = estimate_chat_bubble_size(
+                chat_message.get("text", ""),
+                max_width=CHAT_BUBBLE_MAX_WIDTH,
+                font_size=self.chat_bubble_font_size,
+                aspect_ratio=self.chat_bubble_aspect_ratio,
+                corner_radius_percent=self.chat_bubble_corner_radius,
+            )
+            width = max(width, self.cell_width + 2 * (bubble_width + CHIP_PET_GAP))
+        return width
+
+    def _plugins_changed(self):
+        self.chat_bubble_enabled = self.plugins.chat_bubble_enabled
+        if not self.chat_bubble_enabled:
+            self._cancel_chat_bubble_timer()
+            self.plugins.chat_bubble.clear()
+        self.width = self._desired_width()
+        self.refresh()
+
     def open_settings(self):
         """Single settings surface: display geometry plus overlay appearance.
 
@@ -271,6 +331,12 @@ class PetWindow(Gtk.Window):
              self.message_bubble_width, 120, 600, 10, 0),
             ("Message font size", "messageFontSize",
              self.message_font_size, 6, 24, 1, 0),
+            ("Comic bubble font size", "chatBubbleFontSize",
+             self.chat_bubble_font_size, 8, 28, 0.5, 1),
+            ("Comic bubble ratio (W:H)", "chatBubbleAspectRatio",
+             self.chat_bubble_aspect_ratio, 1, 3.5, 0.1, 1),
+            ("Comic corner radius (%)", "chatBubbleCornerRadiusPercent",
+             self.chat_bubble_corner_radius, 0, 50, 1, 0),
         )
         scales = []
         for label, key, value, minimum, maximum, step, digits in controls:
@@ -298,7 +364,8 @@ class PetWindow(Gtk.Window):
         row += 1
 
         for label, key in (("Plugin background opacity", "pluginOpacity"),
-                           ("Message background opacity", "messageOpacity")):
+                           ("Message background opacity", "messageOpacity"),
+                           ("Comic chat bubble opacity", "chatBubbleOpacity")):
             scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 1.0, 0.05)
             scale.set_digits(2)
             try:
@@ -333,6 +400,15 @@ class PetWindow(Gtk.Window):
         grid.attach(Gtk.Label(label="Collapsed message preview (seconds)", xalign=0), 0, row, 1, 1)
         grid.attach(preview, 1, row, 1, 1)
         scales.append(("collapsedMessagePreviewSeconds", preview))
+        row += 1
+
+        chat_duration = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1, 60, 1)
+        chat_duration.set_digits(0)
+        chat_duration.set_value(float(self.chat_bubble_duration_seconds))
+        chat_duration.set_hexpand(True)
+        grid.attach(Gtk.Label(label="Comic chat bubble duration (seconds)", xalign=0), 0, row, 1, 1)
+        grid.attach(chat_duration, 1, row, 1, 1)
+        scales.append(("chatBubbleDurationSeconds", chat_duration))
         row += 1
 
         side_left = Gtk.RadioButton.new_with_label_from_widget(None, "Plugin stack: Left")
@@ -393,6 +469,17 @@ class PetWindow(Gtk.Window):
         bubble_width = bounded("messageBubbleWidth", self.message_bubble_width,
                                120, 600, integer=True)
         font_size = bounded("messageFontSize", self.message_font_size, 6, 24)
+        chat_font_size = bounded("chatBubbleFontSize", self.chat_bubble_font_size, 8, 28)
+        chat_aspect_ratio = bounded(
+            "chatBubbleAspectRatio", self.chat_bubble_aspect_ratio, 1, 3.5
+        )
+        chat_corner_radius = bounded(
+            "chatBubbleCornerRadiusPercent", self.chat_bubble_corner_radius, 0, 50
+        )
+        chat_duration = bounded(
+            "chatBubbleDurationSeconds", self.chat_bubble_duration_seconds,
+            1, 60, integer=True,
+        )
         theme = values.get("themeMode", self.appearance["themeMode"])
         if theme not in ("dark", "light"):
             theme = "dark"
@@ -403,9 +490,14 @@ class PetWindow(Gtk.Window):
             "scale": pet_scale,
             "messageBubbleWidth": bubble_width,
             "messageFontSize": font_size,
+            "chatBubbleFontSize": chat_font_size,
+            "chatBubbleAspectRatio": chat_aspect_ratio,
+            "chatBubbleCornerRadiusPercent": chat_corner_radius,
+            "chatBubbleDurationSeconds": chat_duration,
             "themeMode": theme,
             "pluginOpacity": bounded("pluginOpacity", 0.94, 0.0, 1.0),
             "messageOpacity": bounded("messageOpacity", 0.94, 0.0, 1.0),
+            "chatBubbleOpacity": bounded("chatBubbleOpacity", 0.94, 0.0, 1.0),
             "blurBackground": values.get("blurBackground") is True,
             "borderRadius": bounded("borderRadius", 14.0, 0.0, 32.0),
             "pluginSide": plugin_side,
@@ -423,10 +515,17 @@ class PetWindow(Gtk.Window):
         self.scale = pet_scale
         self.message_bubble_width = bubble_width
         self.message_font_size = font_size
+        self.chat_bubble_font_size = chat_font_size
+        self.chat_bubble_aspect_ratio = chat_aspect_ratio
+        self.chat_bubble_corner_radius = chat_corner_radius
+        self.chat_bubble_duration_seconds = chat_duration
+        if self.chat_bubble_enabled and self.plugins.chat_bubble.current is not None:
+            self._schedule_chat_bubble_advance()
         self.appearance.update({
             "themeMode": theme,
             "pluginOpacity": updated["pluginOpacity"],
             "messageOpacity": updated["messageOpacity"],
+            "chatBubbleOpacity": updated["chatBubbleOpacity"],
             "blurBackground": updated["blurBackground"],
             "borderRadius": updated["borderRadius"],
             "pluginSide": plugin_side,
@@ -435,8 +534,7 @@ class PetWindow(Gtk.Window):
         self.collapsed_message_preview_seconds = updated["collapsedMessagePreviewSeconds"]
         atlas, cell_width, cell_height = load_atlas(self.pet_directory, pet_scale)
         self.atlas, self.cell_width, self.cell_height = atlas, cell_width, cell_height
-        self.width = max(360, self.cell_width,
-                         self.message_bubble_width + 2 * MESSAGE_PAD_X)
+        self.width = self._desired_width()
         self.relayout()
         self.update_input_shape()
         self.queue_draw()
@@ -537,8 +635,7 @@ class PetWindow(Gtk.Window):
         self.atlas, self.cell_width, self.cell_height = atlas, width, height
         self.look_direction_enabled = look_direction_enabled
         self.look_direction = None
-        self.width = max(360, width,
-                         self.message_bubble_width + 2 * MESSAGE_PAD_X)
+        self.width = max(self._desired_width(), width)
         self.relayout()
         self.restore_position()
         # Re-bind the motion controller to the restored geometry so a pet
@@ -642,6 +739,38 @@ class PetWindow(Gtk.Window):
         if self.preview_messages:
             self.preview_source = GLib.timeout_add_seconds(1, self._preview_sweep)
 
+    def _cancel_chat_bubble_timer(self):
+        if self.chat_bubble_source:
+            GLib.source_remove(self.chat_bubble_source)
+            self.chat_bubble_source = 0
+
+    def _schedule_chat_bubble_advance(self):
+        self._cancel_chat_bubble_timer()
+        if self.chat_bubble_enabled and self.plugins.chat_bubble.current is not None:
+            self.chat_bubble_source = GLib.timeout_add_seconds(
+                self._chat_bubble_ttl(), self._advance_chat_bubble
+            )
+
+    def _chat_bubble_ttl(self) -> int:
+        """Return chat queue duration independently of message preview lifetime."""
+        try:
+            value = int(round(float(self.chat_bubble_duration_seconds)))
+        except (TypeError, ValueError, OverflowError):
+            return 5
+        return max(1, min(60, value))
+
+    def _advance_chat_bubble(self):
+        self.chat_bubble_source = 0
+        if not self.chat_bubble_enabled:
+            return GLib.SOURCE_REMOVE
+        self.plugins.chat_bubble.advance()
+        self.relayout()
+        self.update_input_shape()
+        self.queue_draw()
+        if self.plugins.chat_bubble.current is not None:
+            self._schedule_chat_bubble_advance()
+        return GLib.SOURCE_REMOVE
+
     def _preview_sweep(self):
         self.preview_source = 0
         now = time.monotonic()
@@ -651,6 +780,8 @@ class PetWindow(Gtk.Window):
             del self.preview_messages[thread_id]
         if expired:
             self.relayout()
+            self.update_input_shape()
+            self.queue_draw()
         if self.preview_messages:
             self._reschedule_preview_sweep()
             return GLib.SOURCE_CONTINUE
@@ -703,10 +834,13 @@ class PetWindow(Gtk.Window):
                 return {"ok": True}
             if kind == "notify":
                 response = self.state.apply(command)
-                if response.get("ok") and self.appearance.get("messagesCollapsed"):
+                if response.get("ok"):
                     notification = self.state.messages.get(response.get("threadId"))
-                    if notification is not None:
+                    if notification is not None and self.appearance.get("messagesCollapsed"):
                         self._add_preview(notification)
+                    if notification is not None and self.chat_bubble_enabled:
+                        if self.plugins.chat_bubble.enqueue(notification):
+                            self._schedule_chat_bubble_advance()
                 return response
         return self.state.apply(command)
 
@@ -797,18 +931,28 @@ class PetWindow(Gtk.Window):
         previous_top = self.layout.pet_top
         previous_width = self.layout.width
         previous_pet_x = self.layout.pet_x
+        visible_messages, visible_previews = message_surfaces_for_layout(
+            self.message_rows, self.preview_messages.values()
+        )
+        chat_message = self.plugins.chat_bubble.current if self.chat_bubble_enabled else None
+        self.width = self._desired_width(chat_message)
         self.layout = compute_layout(self.width, self.cell_width, self.cell_height,
-                                     self.plugins.surfaces(), self.message_rows,
+                                     self.plugins.surfaces(), visible_messages,
                                      theme_mode=self.appearance["themeMode"],
                                      plugin_opacity=self.appearance["pluginOpacity"],
-                                     message_opacity=self.appearance["messageOpacity"],
+                                      message_opacity=self.appearance["messageOpacity"],
+                                      chat_bubble_opacity=self.appearance["chatBubbleOpacity"],
                                      border_radius=self.appearance["borderRadius"],
                                      messages_collapsed=self.appearance["messagesCollapsed"],
                                      unread_count=self.unread_message_count,
                                      message_max_width=self.message_bubble_width,
                                       message_font_size=self.message_font_size,
                                       plugin_side=self.plugin_side,
-                                      preview_messages=tuple(self.preview_messages.values()))
+                                       preview_messages=visible_previews,
+                                       chat_font_size=self.chat_bubble_font_size,
+                                       chat_aspect_ratio=self.chat_bubble_aspect_ratio,
+                                       chat_corner_radius_percent=self.chat_bubble_corner_radius,
+                                        chat_message=chat_message)
         if self.height != self.layout.total_height or previous_width != self.width:
             x, y = self.get_position()
             # Preserve sprite screen anchor when content changes above/below
@@ -905,6 +1049,9 @@ class PetWindow(Gtk.Window):
         context.set_source_rgba(0, 0, 0, 0)
         context.paint()
         context.set_operator(cairo.OPERATOR_OVER)
+        # Draw the balloon first so its pointed tail terminates underneath the
+        # pet sprite, like a comic speech pointer aimed at its speaker.
+        draw_chat_bubble(context, self.layout)
         row = list(ANIMATIONS).index(self.current_animation)
         column = self.frame
         if self.drag_active and self.look_direction_enabled and self.look_direction is not None:
@@ -917,7 +1064,10 @@ class PetWindow(Gtk.Window):
                                     -column * self.cell_width, -row * self.cell_height)
         context.paint()
         context.restore()
-        draw_overlay(context, self.layout, show_toggle=self.message_toggle_visible)
+        draw_overlay(
+            context, self.layout, show_toggle=self.message_toggle_visible,
+            draw_chat=False,
+        )
         return False
 
     def on_button(self, _widget, event):
@@ -1369,6 +1519,7 @@ class PetWindow(Gtk.Window):
         self._drop_source("sweep_source")
         self._drop_source("listener_source")
         self._drop_source("preview_source")
+        self._drop_source("chat_bubble_source")
         self._drop_source("_toggle_hide_source")
         for source in list(getattr(self, "signal_sources", [])):
             if source:

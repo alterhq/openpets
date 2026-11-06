@@ -196,6 +196,7 @@ Settings:
 - Linux GTK also persists `display.messageBubbleWidth` and `display.messageFontSize`; adjust them from **Settings…** in the pet menu.
 - Linux GTK also persists `display.pluginSide` ("left" or "right", default "right"), placing the plugin chip stack on the chosen side of the window.
 - Linux GTK also persists `display.collapsedMessagePreviewSeconds` (integer 1–60, default 5 seconds). When messages are collapsed, active notifications preview briefly; each thread expires independently, and a same-thread update resets its timer.
+- Linux GTK offers an opt-in **Comic chat bubbles** plugin (off by default). Every `notify` is presented as chat, with only detail text shown in a shape-aware, rounded speech balloon opposite the plugin stack. Its font size, width-to-height ratio, and corner-radius percentage are adjustable in Settings; the balloon uses fixed 12 px text padding. See [Linux comic chat-bubble plugin](./docs/linux-chat-bubble.md).
 - `socketPath`: Unix socket used by the CLI and pet host.
 - `mcpHost`: HTTP bind host for the MCP server.
 - `mcpPort`: HTTP port for the MCP server.
