@@ -40,6 +40,8 @@ from openpets_linux.chat_bubble_ui import ChatBubbleOverlay  # noqa: E402
 from openpets_linux import mcp_server  # noqa: E402
 from openpets_linux.overlay import _estimate_chat_bubble_size_cached  # noqa: E402
 
+HAS_DISPLAY = bool(os.environ.get("DISPLAY"))
+
 
 class ChatClassificationTests(unittest.TestCase):
     def test_chat_bubble_plugin_is_opt_in(self):
@@ -364,6 +366,7 @@ class ChatBubbleGeometryTests(unittest.TestCase):
     def test_unicode_combining_marks_stay_with_their_base_character(self):
         self.assertEqual(list(_text_graphemes("e\u0301x")), ["e\u0301", "x"])
 
+    @unittest.skipUnless(HAS_DISPLAY, "GTK tests require DISPLAY (use Xvfb)")
     def test_overlay_movement_reuses_cached_raster(self):
         import gi
         gi.require_version("Gtk", "3.0")
@@ -394,6 +397,7 @@ class ChatBubbleGeometryTests(unittest.TestCase):
             overlay.destroy()
             parent.destroy()
 
+    @unittest.skipUnless(HAS_DISPLAY, "GTK tests require DISPLAY (use Xvfb)")
     def test_expired_bubble_releases_cached_raster(self):
         import gi
         gi.require_version("Gtk", "3.0")
@@ -418,6 +422,7 @@ class ChatBubbleGeometryTests(unittest.TestCase):
             overlay.destroy()
             parent.destroy()
 
+    @unittest.skipUnless(HAS_DISPLAY, "GTK tests require DISPLAY (use Xvfb)")
     def test_overlay_initial_window_is_large_enough_for_cached_surface(self):
         import gi
         gi.require_version("Gtk", "3.0")
