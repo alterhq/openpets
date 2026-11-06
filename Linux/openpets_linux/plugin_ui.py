@@ -1,5 +1,6 @@
 """Opt-in plugin scheduling and GTK menu/details; no account access by default."""
 
+import logging
 import threading
 import time
 
@@ -9,7 +10,9 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
 
 from . import plugins
+from .chat_bubble import ChatBubblePlugin
 
+logger = logging.getLogger(__name__)
 
 PROVIDERS = {"battery": ("Battery", plugins.read_battery),
              "claude": ("Claude Code quota", plugins.read_claude_usage),
@@ -30,6 +33,8 @@ class PluginController:
         saved = settings.read().get("linuxPlugins", {})
         self.enabled = {name: isinstance(saved, dict) and saved.get(name) is True
                         for name in PROVIDERS}
+        self.chat_bubble = ChatBubblePlugin()
+        self.chat_bubble_enabled = isinstance(saved, dict) and saved.get("chatBubble") is True
         self.snapshots = {}
         self.next_refresh = {}
         self.busy = False
@@ -47,6 +52,11 @@ class PluginController:
             item.connect("toggled", self.on_toggle, name)
             menu.append(item)
         menu.append(Gtk.SeparatorMenuItem())
+        chat_item = Gtk.CheckMenuItem(label="Comic chat bubbles")
+        chat_item.set_active(self.chat_bubble_enabled)
+        chat_item.connect("toggled", self.on_chat_bubble_toggle)
+        menu.append(chat_item)
+        menu.append(Gtk.SeparatorMenuItem())
         refresh = Gtk.MenuItem(label="Refresh enabled plugins now")
         refresh.connect("activate", lambda *_: self.refresh_enabled())
         menu.append(refresh)
@@ -55,6 +65,25 @@ class PluginController:
         menu.append(details)
         menu.show_all()
         return menu
+
+    def on_chat_bubble_toggle(self, item):
+        try:
+            self.set_chat_bubble_enabled(item.get_active())
+        except (OSError, ValueError, RuntimeError):
+            item.handler_block_by_func(self.on_chat_bubble_toggle)
+            item.set_active(self.chat_bubble_enabled)
+            item.handler_unblock_by_func(self.on_chat_bubble_toggle)
+            self.show_error("Could not save chat-bubble plugin settings.")
+
+    def set_chat_bubble_enabled(self, enabled):
+        if not isinstance(enabled, bool):
+            raise ValueError("Chat-bubble enabled flag must be boolean")
+        saved = self.settings.read().get("linuxPlugins", {})
+        saved = dict(saved) if isinstance(saved, dict) else {}
+        saved["chatBubble"] = enabled
+        self.settings.update({"linuxPlugins": saved})
+        self.chat_bubble_enabled = enabled
+        self.changed()
 
     def start(self):
         self.timer = GLib.timeout_add_seconds(5, self.tick)
@@ -91,9 +120,11 @@ class PluginController:
     def set_enabled(self, name, enabled):
         if name not in PROVIDERS or not isinstance(enabled, bool):
             raise ValueError("Unknown plugin or invalid enabled flag")
-        updated = dict(self.enabled, **{name: enabled})
+        saved = self.settings.read().get("linuxPlugins", {})
+        updated = dict(saved) if isinstance(saved, dict) else {}
+        updated[name] = enabled
         self.settings.update({"linuxPlugins": updated})
-        self.enabled = updated
+        self.enabled = {provider: updated.get(provider) is True for provider in PROVIDERS}
         self.generation += 1
         if not enabled:
             self.snapshots.pop(name, None)
@@ -136,6 +167,7 @@ class PluginController:
                 try:
                     results[name] = PROVIDERS[name][1]()
                 except Exception:
+                    logger.warning("quota provider refresh failed provider=%s", name, exc_info=True)
                     results[name] = {"id": name, "label": PROVIDERS[name][0],
                                      "value": "Unavailable", "state": "error",
                                      "details": ["Provider could not be read."]}

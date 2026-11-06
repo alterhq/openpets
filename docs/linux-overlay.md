@@ -10,6 +10,9 @@ HEADER_HEIGHT`) with compact blocks anchored next to the pet sprite:
   the pet sprite.
 * **Message threads** — 1–2 line bounded-width bubbles stacked directly
   **below** the pet sprite.
+* **Comic chat bubble** — when its opt-in plugin is enabled, conversational
+  detail appears in a title-free rounded speech balloon with a connected tail
+  aimed at the pet, on the side opposite the plugin stack.
 
 Everything else clicks through to the desktop; the window grows only as much
 as the visible content needs.
@@ -20,6 +23,16 @@ as the visible content needs.
 helpers. No Gtk/Gdk widget state, no event wiring, no display server needed
 for import. Tested headlessly with in-memory `cairo.ImageSurface` surfaces
 in `Linux/tests/test_overlay.py`.
+
+Appearance is persisted in `display.themeMode`, `pluginOpacity`,
+`messageOpacity`, and `borderRadius`. Dark and light change overlay surfaces
+between black and white; opacity is applied independently to plugin and message
+backgrounds. Rounded rectangles use a smooth cubic continuous-corner
+approximation. The expanded thread stack has a collapse chevron; collapsed
+threads become one compact bubble with an unread badge and expand on click.
+Background blur remains compositor-owned: the GTK window is ARGB/transparent,
+but the host cannot determine whether Picom (or another compositor) has blur
+rules active.
 
 ## Palette
 
@@ -64,6 +77,11 @@ Transparent gaps between chips or threads are excluded from the input region.
 
 No `__init__.py` changes are needed; `ui.py` already imports symbols
 directly from submodules.
+
+The conversational bubble is independently computed as `chat_bubble` in
+`OverlayLayout`; its rounded body and pointer are included in the input shape
+and render without a title. Its display duration has a separate setting from
+collapsed message previews.
 
 ## Swift comparison
 

@@ -2,6 +2,7 @@
 
 import importlib.util
 import ipaddress
+import logging
 import os
 from pathlib import Path
 import subprocess
@@ -12,6 +13,9 @@ from typing import Any
 
 from .core import ANIMATIONS, ANIMATION_ALIASES, list_pet_animations as core_list_pet_animations, resolve_animation
 from .ipc import IPCError, send
+from .logging_setup import elapsed_ms, log_process_memory
+
+logger = logging.getLogger(__name__)
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 STATUS_VALUES = ("running", "review", "done", "failed", "waiting", "message")
@@ -34,9 +38,19 @@ def _resolve_animation(name):
 
 
 def _ipc(command, socket_path):
+    started = time.perf_counter()
+    command_type = str(command.get("type", "unknown")) if isinstance(command, dict) else "invalid"
     try:
-        return send(command, _resolve_socket_path(socket_path))
+        result = send(command, _resolve_socket_path(socket_path))
+        if command_type not in ("ping", "getState"):
+            notification = command.get("notification", {}) if command_type == "notify" else {}
+            status = str(notification.get("status", ""))[:32] if isinstance(notification, dict) else ""
+            logger.info("MCP IPC type=%s status=%s ok=%s elapsed_ms=%.1f",
+                        command_type, status, bool(result.get("ok")), elapsed_ms(started))
+        return result
     except (IPCError, OSError, ValueError) as error:
+        logger.error("MCP IPC failed type=%s elapsed_ms=%.1f: %s",
+                     command_type, elapsed_ms(started), error)
         return {"ok": False, "message": str(error)}
 
 
@@ -86,10 +100,13 @@ def stop_pet(socket_path=None):
 
 
 def notify(socket_path=None, title="", text="", status="", threadId=None,
-           url=None, buttonLabel=None, ttlSeconds=None):
+           url=None, buttonLabel=None, ttlSeconds=None, kind="chat"):
     if not isinstance(title, str) or not title or status not in STATUS_VALUES:
         return {"ok": False, "message": "A title and supported status are required"}
-    notification = {"title": title, "text": text, "status": status}
+    if kind not in (None, "status", "chat", "conversation"):
+        return {"ok": False, "message": "kind must be status, chat, or conversation"}
+    # All notifications are presented as conversational text by comic chat.
+    notification = {"title": title, "text": text, "status": status, "kind": "chat"}
     for key, value in (("threadId", threadId), ("url", url), ("buttonLabel", buttonLabel), ("ttlSeconds", ttlSeconds)):
         if value is not None:
             notification[key] = value
@@ -152,7 +169,9 @@ def create_server(socket_path=None, host="127.0.0.1", port=3001, endpoint="/mcp"
         sdk_module.Settings.model_rebuild(_types_namespace=vars(sdk_module))
     server = FastMCP("openpets", instructions=(
         "Use wake_pet before reporting work if the pet is asleep. Use notify for "
-        "meaningful progress, review, completion or failure; preserve its threadId "
+        "meaningful progress, review, completion or failure. Every notify is a chat "
+        "message and must be marked kind='chat' for the optional comic bubble. "
+        "Preserve its threadId "
         "for updates to the same task. Do not spam updates or stop the pet unless "
         "the user requests it. Notification action URLs open only after a user click."
     ), host=host, port=port, streamable_http_path=endpoint,
@@ -182,9 +201,12 @@ def create_server(socket_path=None, host="127.0.0.1", port=3001, endpoint="/mcp"
     @server.tool(name="notify")
     def tool_notify(title: str, status: str, text: str = "", threadId: str | None = None,
                     url: str | None = None, buttonLabel: str | None = None,
-                    ttlSeconds: float | None = None) -> dict[str, Any]:
-        """Show task progress. Save returned threadId and reuse it to update the same task."""
-        return result(notify(path, title, text, status, threadId, url, buttonLabel, ttlSeconds))
+                    ttlSeconds: float | None = None, kind: str = "chat") -> dict[str, Any]:
+        """Notify an update. Always mark every notify as kind='chat'.
+
+        Save returned threadId and reuse it to update the same task/chat thread.
+        """
+        return result(notify(path, title, text, status, threadId, url, buttonLabel, ttlSeconds, kind))
 
     @server.tool(name="play_pet_animation")
     def tool_animation(name: str, loop: bool = True, ttlSeconds: float | None = None) -> dict[str, Any]:
@@ -219,10 +241,21 @@ def run_server(socket_path, transport="streamable-http", host="127.0.0.1", port=
     if transport not in ("stdio", "streamable-http"):
         raise ValueError("Unsupported MCP transport")
     server = create_server(socket_path, host, port, endpoint)
-    if transport == "stdio":
-        server.run(transport="stdio")
-    else:
-        import uvicorn
-        # MCP uses HTTP/SSE, not WebSockets. Avoid importing an unrelated system
-        # websockets version exposed by the system-site-packages GI environment.
-        uvicorn.run(server.streamable_http_app(), host=host, port=port, ws="none", log_level="warning")
+    logger.info("MCP server starting transport=%s host=%s port=%s endpoint=%s",
+                transport, host, port, endpoint)
+    log_process_memory(logger, role="mcp-start")
+    try:
+        if transport == "stdio":
+            server.run(transport="stdio")
+        else:
+            import uvicorn
+            # MCP uses HTTP/SSE, not WebSockets. Avoid importing an unrelated system
+            # websockets version exposed by the system-site-packages GI environment.
+            # Keep Uvicorn on the application's private per-process log handler.
+            uvicorn.run(server.streamable_http_app(), host=host, port=port, ws="none",
+                        log_level="info", log_config=None)
+    except Exception:
+        logger.exception("MCP server terminated with an error")
+        raise
+    finally:
+        logger.info("MCP server stopped")

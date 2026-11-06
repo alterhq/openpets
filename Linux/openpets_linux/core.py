@@ -26,6 +26,7 @@ __all__ = [
     "ANIMATION_ALIASES",
     "STATUS_ANIMATION",
     "FINITE_STATUS_ANIMATIONS",
+    "has_active_task",
     "DEFAULT_SCALE",
     "DEFAULT_MESSAGE_AREA_HEIGHT",
     "MAX_COMMAND_SIZE",
@@ -102,6 +103,25 @@ FINITE_STATUS_ANIMATIONS: frozenset[str] = frozenset({
     "committed",
 })
 
+# Notifications in these states mean the task is still underway. The pet host
+# uses the latest status for each thread to freeze autonomous movement until
+# every active task reaches a terminal status (for example, done or failed),
+# then waits for any visible transient message surface to expire before resume.
+ACTIVE_TASK_STATUSES: frozenset[str] = frozenset({
+    "running", "task", "working", "waiting", "queued", "pending",
+    "review", "reviewing",
+})
+
+
+def has_active_task(messages: Any) -> bool:
+    """Return whether any thread in a message mapping is still in progress."""
+    items = messages.values() if isinstance(messages, dict) else messages
+    return any(
+        isinstance(message, dict)
+        and str(message.get("status", "")).strip().lower() in ACTIVE_TASK_STATUSES
+        for message in items
+    )
+
 DEFAULT_SCALE = 0.42
 DEFAULT_MESSAGE_AREA_HEIGHT = 56
 
@@ -115,6 +135,7 @@ MAX_STATUS_LENGTH = 64
 MAX_THREAD_ID_LENGTH = 128
 MAX_URL_LENGTH = 2048
 MAX_BUTTON_LABEL_LENGTH = 128
+MAX_KIND_LENGTH = 32
 MAX_MESSAGES = 100
 
 
@@ -292,6 +313,15 @@ class State:
         ):
             return {"ok": False, "message": "notification.buttonLabel is too long"}
 
+        kind = notification.get("kind", notification.get("messageType"))
+        if kind is not None and (
+            not isinstance(kind, str) or not kind or len(kind) > MAX_KIND_LENGTH
+        ):
+            return {"ok": False, "message": "notification.kind must be a short string"}
+        # Notify is always surfaced as chat text; status remains available for
+        # animation/task semantics, but never changes the presentation kind.
+        kind = "chat"
+
         ttl_seconds = notification.get("ttlSeconds")
         if ttl_seconds is not None and (
             not _is_finite_number(ttl_seconds) or ttl_seconds < 0
@@ -310,7 +340,9 @@ class State:
             "threadId": thread_id,
             "url": url,
             "buttonLabel": button_label,
+            "kind": kind,
             "ttlSeconds": ttl_seconds,
+            "updated_at": now,
             "expires_at": expires_at,
         }
 
@@ -406,13 +438,16 @@ def load_config(path: str | None = None) -> dict[str, Any]:
     Missing or unreadable config falls back to defaults:
 
         socketPath /tmp/openpets-{UID}.sock
-        display {scale: 0.42, messageAreaHeight: 56}
+        display {scale: 0.42, messageAreaHeight: 56,
+                 messageBubbleWidth: 240, messageFontSize: 10}
     """
     result: dict[str, Any] = {
         "socketPath": default_socket_path(),
         "display": {
             "scale": DEFAULT_SCALE,
             "messageAreaHeight": DEFAULT_MESSAGE_AREA_HEIGHT,
+            "messageBubbleWidth": 240,
+            "messageFontSize": 10.0,
         },
     }
 
@@ -454,5 +489,11 @@ def load_config(path: str | None = None) -> dict[str, Any]:
         message_area_height = display.get("messageAreaHeight")
         if _is_finite_number(message_area_height):
             result["display"]["messageAreaHeight"] = message_area_height
+        message_bubble_width = display.get("messageBubbleWidth")
+        if _is_finite_number(message_bubble_width) and 120 <= message_bubble_width <= 600:
+            result["display"]["messageBubbleWidth"] = int(message_bubble_width)
+        message_font_size = display.get("messageFontSize")
+        if _is_finite_number(message_font_size) and 6 <= message_font_size <= 24:
+            result["display"]["messageFontSize"] = float(message_font_size)
 
     return result

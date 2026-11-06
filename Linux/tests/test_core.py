@@ -23,6 +23,7 @@ from openpets_linux.core import (  # noqa: E402
     MAX_COMMAND_SIZE,
     STATUS_ANIMATION,
     State,
+    has_active_task,
     load_config,
     list_pet_animations,
     resolve_animation,
@@ -85,6 +86,24 @@ class TestAnimationCatalog(unittest.TestCase):
         self.assertIsNone(resolve_animation(""))
         self.assertIsNone(resolve_animation(None))
         self.assertIsNone(resolve_animation(7))
+
+
+class TestActiveTaskDetection(unittest.TestCase):
+    def test_running_waiting_review_and_aliases_are_active(self):
+        for status in ("running", "waiting", "review", "reviewing", "working", "queued"):
+            with self.subTest(status=status):
+                self.assertTrue(has_active_task({"thread": {"status": status}}))
+
+    def test_terminal_and_non_task_statuses_are_not_active(self):
+        for status in ("done", "success", "failed", "message", "waving", ""):
+            with self.subTest(status=status):
+                self.assertFalse(has_active_task({"thread": {"status": status}}))
+
+    def test_any_active_thread_keeps_pet_frozen(self):
+        self.assertTrue(has_active_task({
+            "one": {"status": "done"},
+            "two": {"status": "review"},
+        }))
 
 
 class TestStateDefaults(unittest.TestCase):
@@ -520,7 +539,8 @@ class TestLoadConfig(unittest.TestCase):
         )
         self.assertEqual(
             config["display"],
-            {"scale": DEFAULT_SCALE, "messageAreaHeight": DEFAULT_MESSAGE_AREA_HEIGHT},
+            {"scale": DEFAULT_SCALE, "messageAreaHeight": DEFAULT_MESSAGE_AREA_HEIGHT,
+             "messageBubbleWidth": 240, "messageFontSize": 10.0},
         )
 
     def test_defaults_do_not_write_file(self):
@@ -545,7 +565,8 @@ class TestLoadConfig(unittest.TestCase):
             config = load_config(path)
             self.assertEqual(config["socketPath"], "/tmp/custom.sock")
             self.assertEqual(
-                config["display"], {"scale": 0.84, "messageAreaHeight": 112}
+                config["display"], {"scale": 0.84, "messageAreaHeight": 112,
+                                     "messageBubbleWidth": 240, "messageFontSize": 10.0}
             )
         finally:
             os.remove(path)

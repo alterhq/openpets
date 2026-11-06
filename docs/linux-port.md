@@ -8,6 +8,9 @@ unchanged. Docker is for development/testing, never required to run the pet.
 
 - Bundled Starcorn from OpenPetsKit v0.2.1, with its MIT notice; no asset
   downloads on launch. `run --pet PATH` remains available for local bundles.
+  Custom Codex pet atlases support v1 (8x9) and v2 (8x11). V2 pets use their
+  16 look-direction poses while dragged without moving the window; v1 pets
+  retain drag-to-move behavior.
 - Pet chooser with preview, local/XDG discovery, persistent active pet and
   per-pet position; restored positions are clamped to a current monitor.
 - Frame-timed sprites, drag, tray menu, outside-rectangle click-through.
@@ -17,7 +20,10 @@ unchanged. Docker is for development/testing, never required to run the pet.
   without jumping), and **Free roam** (random diagonal/horizontal waypoints
   inside the current monitor workarea, never straight vertical). Mutually
   exclusive, persisted in `config.json` as `motionMode`. Dragging temporarily
-  pauses autonomous movement and resumes safely on release.
+  pauses autonomous movement and resumes safely on release. Autonomous motion
+  also pauses while any notification thread is running, waiting, or in review.
+  After the last active thread reaches a terminal state, motion stays paused
+  until its visible comic bubble and/or collapsed-message preview expires.
 - Threaded notifications, TTL, bounded in-memory history and details window;
   HTTP(S) buttons open only on an explicit click, never shell/command/file URLs.
 - Optional official-SDK MCP HTTP/stdio service and OpenCode V2 config generator.
@@ -43,6 +49,41 @@ PYTHONPATH=Linux /usr/bin/python3 -m openpets_linux notify --title Build --statu
 
 Click a notification row or **Messages / actions…** to view full content,
 actions and session history. **Choose pet…** previews and switches local pets.
+**Settings…** opens one surface for display geometry and overlay appearance:
+pet scale, message-bubble width and font size, dark/light theme, plugin and
+message background opacity (continuous 0.0..1.0), plugin stack side (left or
+right), collapsed-message preview seconds, corner radius, and compositor
+background blur. The circular expand/collapse control sits at the pet's upper
+right; when collapsed it carries a red unread dot. Active notifications appear
+  as temporary previews when collapsed (including existing messages at collapse),
+  with an independent timer per thread; same-thread updates reset that timer.
+  When the comic-bubble queue is still visible at preview expiry, removal is
+  deferred until the final bubble expires to avoid shifting the pet mid-message.
+  Comic bubbles render in a separate input-transparent GTK window and are
+  raster-cached; moving the pet repositions the window without rerendering the
+  bubble, while content/style/side changes invalidate the cache.
+The control hides 2.5 seconds after the pointer leaves the pet and returns when
+the pointer enters the pet's clickable area. A new notification received while
+collapsed also reveals its preview and control briefly, even if auto-hide had
+already hidden the control. Message cards are spaced below the control and use
+balanced padding. All changes persist in
+`config.json` and apply immediately. Background blur is compositor-owned: enable
+it in a compatible compositor such as Picom (`blur-background` for transparent
+ARGB windows). OpenPets reports that setup is needed, but cannot detect the
+compositor's active blur rules reliably or configure them automatically.
+
+OpenPets writes private, rotating per-process diagnostics (INFO/WARNING/ERROR)
+to `${XDG_STATE_HOME:-~/.local/state}/openpets/logs/` (override with
+`OPENPETS_LOG_DIR`). GUI and MCP processes use separate PID-tagged files;
+notification text and URLs are intentionally excluded. The GUI records a
+memory snapshot at startup and about once per minute, including RSS, anonymous,
+file-backed, shared, and swapped memory.
+
+For a Codex Pets bundle such as Cute Yaya, install it with
+`npx codex-pets add cute-yaya`, then choose **Choose pet…** → **小娅娅** (or
+run `openpets pets select cute-yaya`). Version 2 bundles use an 8-column by
+11-row atlas; the current Linux host plays the nine standard animation rows and
+accepts the two additional look-direction rows without rejecting the bundle.
 Use **Plugins** to explicitly enable providers. For quota, the confirmation
 explains credential access/network use. No plugin is enabled by default.
 
@@ -50,6 +91,23 @@ See [MCP/OpenCode](linux-mcp.md) and [plugins](linux-plugins.md).
 The CLI supports `plugins list`, `plugins show battery`, `plugins enable battery`
 and `plugins disable battery`. Quota `show`/`enable` explicitly requires
 `--allow-network`; `disable` never needs account access.
+
+### OpenCode task-status integration
+
+OpenCode V2 plugins can subscribe to the public event stream. A lifecycle
+integration can use one stable notification `threadId` per session and update
+that thread through OpenPets `notify`: `session.execution.started` → `running`,
+`session.execution.succeeded` → `done`, `session.execution.failed` → `failed`,
+and `session.execution.interrupted` or an enqueued follow-up → `waiting`.
+`done` is already a finite pet animation and returns to the normal idle state.
+`review` is not reliably inferable from a generic execution event: completing a
+turn does not distinguish a review handoff from a normal answer. Emit `review`
+explicitly when an agent/tool starts a review, then update the same thread to
+`done` (or `failed`) when that review finishes. Keep notifications idempotent
+and scoped by session ID so parallel sessions do not overwrite each other's
+pet status. Validate event payload fields against the OpenCode version in use
+before shipping an automatic plugin; the Linux host exposes the MCP notification
+tool but does not currently install a lifecycle plugin.
 
 ## Data and security
 
